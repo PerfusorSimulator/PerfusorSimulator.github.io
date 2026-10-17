@@ -1,0 +1,2506 @@
+<!DOCTYPE html>
+<html lang="hr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Perfusor simulator — Sveučilište u Rijeci</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&display=swap');
+        
+        body {
+            background-color: #0b0f12;
+            color: #e2e8f0;
+            font-family: 'Inter', sans-serif;
+            user-select: none;
+            overflow-x: hidden;
+        }
+        .mono {
+            font-family: 'JetBrains Mono', monospace;
+        }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: #12181c; }
+        ::-webkit-scrollbar-thumb { background: #2a3740; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #3b4d59; }
+
+        /* Simulink Canvas Grid */
+        .simulink-grid {
+            background-color: #0f1519;
+            background-image: 
+                linear-gradient(to right, rgba(45, 62, 72, 0.22) 1px, transparent 1px),
+                linear-gradient(to bottom, rgba(45, 62, 72, 0.22) 1px, transparent 1px),
+                linear-gradient(to right, rgba(56, 152, 207, 0.12) 1px, transparent 1px),
+                linear-gradient(to bottom, rgba(56, 152, 207, 0.12) 1px, transparent 1px);
+            background-size: 20px 20px, 20px 20px, 100px 100px, 100px 100px;
+        }
+
+        /* Simulink Block Styling */
+        .sim-block {
+            position: absolute;
+            width: 205px;
+            background: #172026;
+            border: 2px solid #33444f;
+            border-radius: 10px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.55);
+            cursor: grab;
+            transition: border-color 0.15s, box-shadow 0.15s;
+            z-index: 10;
+        }
+        .sim-block:active {
+            cursor: grabbing;
+        }
+        .sim-block.selected {
+            border-color: #38bdf8;
+            box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.25), 0 12px 30px rgba(0,0,0,0.7);
+        }
+
+        /* Ports */
+        .port {
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            border: 2px solid #0f1519;
+            cursor: crosshair;
+            transition: transform 0.15s, background-color 0.15s, box-shadow 0.15s;
+        }
+        .port:hover, .port.active-port {
+            transform: scale(1.35);
+            box-shadow: 0 0 10px #38bdf8;
+        }
+        .port-in {
+            background-color: #64748b;
+            margin-left: -9px;
+        }
+        .port-out {
+            background-color: #38bdf8;
+            margin-right: -9px;
+        }
+        .port.connected {
+            background-color: #10b981;
+        }
+
+        /* Animated signal flow on SVG wires */
+        @keyframes pulseFlow {
+            to { stroke-dashoffset: -24; }
+        }
+        .wire-path {
+            fill: none;
+            stroke-width: 3;
+            stroke-linecap: round;
+            cursor: pointer;
+            transition: stroke-width 0.15s;
+        }
+        .wire-path:hover {
+            stroke-width: 5;
+            stroke: #f43f5e !important;
+        }
+        .wire-animated {
+            stroke-dasharray: 8 4;
+            animation: pulseFlow 0.8s linear infinite;
+        }
+
+        /* 7" HMI Frame inside Popup */
+        .hmi-frame {
+            width: 1240px;
+            height: 680px;
+            background-color: #13191c;
+            border: 10px solid #07090a;
+            border-radius: 22px;
+            box-shadow: 0 25px 60px rgba(0,0,0,0.9), 0 0 0 1px #2b3940;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            position: relative;
+            transform-origin: top center;
+        }
+        .card {
+            background-color: #192125;
+            border: 1px solid #253036;
+            border-radius: 8px;
+        }
+        .btn-touch {
+            transition: all 0.1s ease;
+        }
+        .btn-touch:active:not(:disabled) {
+            transform: scale(0.97);
+        }
+        .btn-touch:disabled {
+            opacity: 0.35;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body class="h-screen flex flex-col overflow-hidden">
+
+    <!-- 0. LOGIN SCREEN OVERLAY -->
+    <div id="login-screen" class="fixed inset-0 z-[100] bg-[#080c0f] flex items-center justify-center p-4">
+        <div class="absolute inset-0 simulink-grid opacity-50 pointer-events-none"></div>
+        <div class="relative bg-[#12191e] border border-[#263540] rounded-2xl max-w-md w-full p-7 shadow-[0_25px_70px_rgba(0,0,0,0.85)]">
+            <div class="flex items-center gap-3.5 mb-5">
+                <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-sky-500/25 to-teal-500/20 border border-sky-400/40 flex items-center justify-center shrink-0">
+                    <svg class="w-7 h-7 text-sky-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z"/>
+                    </svg>
+                </div>
+                <div>
+                    <span class="text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded bg-sky-500/20 text-sky-300 border border-sky-500/30 mono">Perfusor simulator</span>
+                    <h2 class="text-xs font-bold text-slate-200 mt-1 leading-snug">
+                        Sveučilište u Rijeci, Medicinski fakultet,<br>Centar za biomodeliranje i inovacije u medicini
+                    </h2>
+                </div>
+            </div>
+
+            <form onsubmit="handleLogin(event)" class="space-y-4">
+                <div>
+                    <label class="block text-[11px] font-bold uppercase tracking-wider text-slate-400 mono mb-1.5">Korisničko ime</label>
+                    <input id="login-username" type="text" value="medri.simulacija" required
+                        class="w-full px-3.5 py-2.5 rounded-lg bg-[#0b1014] border border-[#283742] text-sm text-white mono focus:outline-none focus:border-sky-400">
+                </div>
+                <div>
+                    <label class="block text-[11px] font-bold uppercase tracking-wider text-slate-400 mono mb-1.5">Zaporka (Šifra)</label>
+                    <input id="login-password" type="password" value="" placeholder="Unesite zaporku..." autofocus required
+                        class="w-full px-3.5 py-2.5 rounded-lg bg-[#0b1014] border border-[#283742] text-sm text-white mono focus:outline-none focus:border-sky-400">
+                </div>
+
+                <div id="login-error" class="hidden p-2.5 rounded-lg bg-rose-950/60 border border-rose-500/50 text-xs text-rose-200 flex items-center gap-2">
+                    <svg class="w-4 h-4 text-rose-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                    <span>Netočna korisnička oznaka ili šifra! Pristup odbijen.</span>
+                </div>
+
+                <button type="submit" class="btn-touch w-full py-3 rounded-lg bg-sky-500 hover:bg-sky-400 text-slate-950 font-extrabold text-xs uppercase tracking-wider shadow-[0_0_20px_rgba(56,189,248,0.3)]">
+                    Prijava u sustav
+                </button>
+            </form>
+            <div class="mt-4 pt-3 border-t border-slate-800/80 flex justify-between text-[11px] text-slate-500 mono">
+                <span>UNIRI · MEDRI</span>
+                <span>Autorizirani pristup</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- TOP INSTITUTIONAL HEADER & TOOLBAR -->
+    <header class="bg-[#12191e] border-b border-[#233038] px-5 py-3 flex flex-wrap items-center justify-between gap-4 z-30 shadow-lg">
+        <div class="flex items-center gap-3.5">
+            <!-- University Crest / Emblem SVG -->
+            <div class="w-11 h-11 rounded-xl bg-gradient-to-br from-sky-500/20 to-teal-500/20 border border-sky-400/40 flex items-center justify-center shadow-inner shrink-0">
+                <svg class="w-6 h-6 text-sky-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z"/>
+                </svg>
+            </div>
+            <div>
+                <div class="flex items-center gap-2">
+                    <span class="text-[11px] font-bold uppercase tracking-widest px-2 py-0.5 rounded bg-sky-500/20 text-sky-300 border border-sky-500/30 mono">Perfusor simulator</span>
+                    <span id="active-project-badge" class="text-xs text-amber-300 mono">Prazna radna površina</span>
+                </div>
+                <h1 class="text-sm md:text-base font-extrabold text-white tracking-tight mt-0.5">
+                    Sveučilište u Rijeci, Medicinski fakultet, Centar za biomodeliranje i inovacije u medicini
+                </h1>
+            </div>
+        </div>
+
+        <!-- Toolbar Actions -->
+        <div class="flex items-center gap-2 flex-wrap">
+            <!-- Project Loader Dropdown / Button -->
+            <div class="flex items-center bg-[#172128] border border-sky-500/40 rounded-lg p-1 gap-1.5">
+                <span class="text-[11px] mono text-slate-300 pl-2">Projekt:</span>
+                <button onclick="loadProjektMarko()" class="btn-touch px-3 py-1.5 rounded bg-sky-500/20 hover:bg-sky-500/35 border border-sky-400/50 text-xs font-bold text-sky-200 flex items-center gap-1.5" title="Učitaj gotovi model ProjektMarko na radnu površinu">
+                    <svg class="w-3.5 h-3.5 text-sky-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+                    <span>ProjektMarko</span>
+                </button>
+                <button onclick="clearWorkspace()" class="btn-touch px-2.5 py-1.5 rounded hover:bg-slate-800 text-[11px] font-semibold text-slate-400 hover:text-slate-200" title="Isprazni cijelu radnu površinu">
+                    Prazno platno
+                </button>
+            </div>
+
+            <!-- Connection Counter Badge -->
+            <div id="wiring-status-badge" class="px-3 py-1.5 rounded-lg bg-[#172128] border border-[#293842] text-xs mono flex items-center gap-2">
+                <span id="wiring-dot" class="w-2.5 h-2.5 rounded-full bg-amber-400"></span>
+                <span>Spojevi: <strong id="conn-count" class="text-white">0/12</strong></span>
+            </div>
+
+            <button onclick="autoConnectAll()" class="btn-touch px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-600 text-xs font-semibold text-slate-200 flex items-center gap-1.5" title="Automatski spoji sve potrebne blokove prema shemi">
+                <svg class="w-4 h-4 text-sky-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                <span>Auto-spoji</span>
+            </button>
+
+            <button onclick="clearConnections()" class="btn-touch px-2.5 py-2 rounded-lg bg-slate-800/80 hover:bg-rose-950/60 border border-slate-700 hover:border-rose-500/40 text-xs font-semibold text-slate-300 hover:text-rose-300">
+                Odspoji žice
+            </button>
+
+            <!-- JSON Import / Export Controls -->
+            <input type="file" id="json-file-input" accept=".json,application/json" class="hidden" onchange="importProjectJSON(event)">
+            <button onclick="exportProjectJSON()" class="btn-touch px-3 py-2 rounded-lg bg-teal-600/20 hover:bg-teal-600/35 border border-teal-500/40 text-xs font-bold text-teal-200 flex items-center gap-1.5" title="Spremi trenutnu shemu i postavke u .json datoteku">
+                <svg class="w-4 h-4 text-teal-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+                <span>Spremi JSON</span>
+            </button>
+            <button onclick="triggerImportJSON()" class="btn-touch px-3 py-2 rounded-lg bg-amber-600/20 hover:bg-amber-600/35 border border-amber-500/40 text-xs font-bold text-amber-200 flex items-center gap-1.5" title="Učitaj spremljeni projekt iz .json datoteke">
+                <svg class="w-4 h-4 text-amber-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+                <span>Učitaj JSON</span>
+            </button>
+
+            <button onclick="exportSchematicPDF()" id="btn-export-pdf" class="btn-touch px-3.5 py-2 rounded-lg bg-indigo-600/25 hover:bg-indigo-600/40 border border-indigo-400/50 text-xs font-bold text-indigo-200 flex items-center gap-1.5">
+                <svg class="w-4 h-4 text-indigo-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                <span>Izvoz u PDF</span>
+            </button>
+
+            <button onclick="attemptRunSimulation()" id="btn-run-sim" class="btn-touch px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-extrabold text-xs tracking-wide flex items-center gap-2 shadow-[0_0_20px_rgba(16,185,129,0.35)]">
+                <svg class="w-4 h-4 fill-current" viewBox="0 0 20 20"><path d="M6.3 2.841A1.5 1.5 0 004 4.11V15.89a1.5 1.5 0 002.3 1.269l9.344-5.89a1.5 1.5 0 000-2.538L6.3 2.84z"/></svg>
+                <span>POKRENI SIMULACIJU</span>
+            </button>
+        </div>
+    </header>
+
+    <!-- MAIN WORKSPACE: LEFT PALETTE + CENTER SIMULINK CANVAS -->
+    <div class="flex-1 flex overflow-hidden relative">
+        
+        <!-- Left Sidebar: Expanded Component Library & Checklist -->
+        <aside class="w-80 bg-[#12181c] border-r border-[#222d35] flex flex-col p-3.5 overflow-hidden z-20 shrink-0">
+            <div class="shrink-0 space-y-2.5">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <h2 class="text-xs font-bold uppercase tracking-wider text-sky-400 mono">Biblioteka Elemenata</h2>
+                        <p class="text-[11px] text-slate-400 mt-0.5">
+                            Povucite (Drag & Drop) ili kliknite na element za dodavanje.
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Quick Load ProjektMarko Banner -->
+                <div class="p-2.5 rounded-xl bg-gradient-to-r from-sky-950/70 to-teal-950/50 border border-sky-500/40 flex items-center justify-between gap-2">
+                    <div>
+                        <div class="text-xs font-bold text-white">Primjer: ProjektMarko</div>
+                        <div class="text-[10px] text-sky-300">Kompletna shema perfuzora (10 blokova)</div>
+                    </div>
+                    <button onclick="loadProjektMarko()" class="btn-touch px-3 py-1.5 rounded-lg bg-sky-500 hover:bg-sky-400 text-slate-950 font-extrabold text-xs shrink-0">
+                        Učitaj
+                    </button>
+                </div>
+
+                <div class="flex items-center justify-between pt-1">
+                    <span class="mono text-[11px] font-bold uppercase text-slate-300">Dostupni elementi (18)</span>
+                    <span class="mono text-[10px] text-sky-400">Povuci na platno ➔</span>
+                </div>
+            </div>
+
+            <!-- Expanded Component Library List with Icons (Takes maximum vertical space) -->
+            <div id="library-palette" class="flex-1 min-h-0 overflow-y-auto space-y-1.5 pr-1 my-2">
+                <!-- Populated dynamically with icons and drag-and-drop support -->
+            </div>
+
+            <!-- Lowered Horizontal Delimiter & Compact Checklist Section -->
+            <div class="shrink-0 pt-2.5 border-t border-[#263540]">
+                <div class="flex items-center justify-between mb-1.5">
+                    <span class="mono text-[10px] font-bold uppercase text-slate-300">Status spojeva sheme</span>
+                    <span id="checklist-badge" class="mono text-[10px] px-2 py-0.5 rounded bg-amber-500/20 text-amber-300">Prazno</span>
+                </div>
+                <div id="connection-checklist" class="space-y-1 max-h-24 overflow-y-auto pr-1 text-[10px] mono">
+                    <!-- Dynamically populated by JS -->
+                </div>
+
+                <!-- Bottom Status / Message Box -->
+                <div id="workspace-toast" class="mt-2 p-2 rounded-lg bg-[#162026] border border-slate-700 text-[11px] text-slate-300 leading-snug">
+                    Povucite elemente iz biblioteke na radnu površinu ili učitajte <strong>Primjer: ProjektMarko</strong>.
+                </div>
+            </div>
+        </aside>
+
+        <!-- Center Interactive Simulink Canvas (Exported to PDF) -->
+        <main class="flex-1 relative overflow-auto" id="canvas-scroll-container">
+            <div id="simulink-canvas" 
+                 class="simulink-grid relative w-[1420px] h-[820px] overflow-hidden"
+                 ondragover="handleCanvasDragOver(event)"
+                 ondrop="handleCanvasDrop(event)">
+                
+                <!-- Institutional Watermark Header inside Canvas -->
+                <div class="absolute top-4 left-6 right-6 flex justify-between items-center pointer-events-none z-0 border-b border-slate-800/80 pb-3">
+                    <div>
+                        <div class="text-xs font-bold uppercase tracking-widest text-sky-400/90 mono">
+                            SVEUČILIŠTE U RIJECI · MEDICINSKI FAKULTET · CENTAR ZA BIOMODELIRANJE I INOVACIJE U MEDICINI
+                        </div>
+                        <div class="text-lg font-extrabold text-slate-200/90 mt-0.5">
+                            Perfusor simulator — Blok Dijagram Sustava (Hidraulika, Arduino 100 Hz i RPi 5 HMI)
+                        </div>
+                    </div>
+                    <div class="text-right mono text-[11px] text-slate-400">
+                        <div>Model: <span id="canvas-model-name" class="text-slate-200">Novi_Model.slx</span></div>
+                        <div>Solver: <span class="text-emerald-400">Fixed-step (Discrete, Ts = 0.01 s / 100 Hz)</span></div>
+                    </div>
+                </div>
+
+                <!-- Layer 1: SVG Wires -->
+                <svg id="wires-svg" class="absolute inset-0 w-full h-full pointer-events-auto z-0"></svg>
+
+                <!-- Layer 2: Draggable Simulink Blocks -->
+                <div id="blocks-container" class="absolute inset-0 w-full h-full pointer-events-none"></div>
+
+                <!-- Legend Footer inside Canvas -->
+                <div class="absolute bottom-3 left-6 right-6 flex items-center justify-between text-[11px] mono text-slate-400 pointer-events-none border-t border-slate-800/80 pt-2">
+                    <div class="flex items-center gap-5">
+                        <span class="flex items-center gap-1.5"><span class="w-3 h-1 bg-sky-400 inline-block"></span> Hidraulički tok (3/8" silikon)</span>
+                        <span class="flex items-center gap-1.5"><span class="w-3 h-1 bg-emerald-400 inline-block"></span> Senzorski I2C / Hall / Zrak signali</span>
+                        <span class="flex items-center gap-1.5"><span class="w-3 h-1 bg-amber-400 inline-block"></span> Stateflow & PI sabirnica</span>
+                        <span class="flex items-center gap-1.5"><span class="w-3 h-1 bg-purple-400 inline-block"></span> USB Serial 250 kBd ($SET / $TEL)</span>
+                    </div>
+                    <div>Perfusor simulator · MCU: Arduino Mega 2560 · HMI: Raspberry Pi 5</div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- BLOCK SETTINGS MODAL (OPENED BY GEAR ICON ⚙️ ON ANY WORKSPACE BLOCK) -->
+    <div id="block-config-modal" class="hidden fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div class="bg-[#151e24] border border-sky-500/40 rounded-2xl max-w-md w-full p-6 shadow-2xl">
+            <div class="flex items-center justify-between border-b border-slate-800 pb-3 mb-4">
+                <div class="flex items-center gap-2.5">
+                    <span class="w-7 h-7 rounded-lg bg-sky-500/20 border border-sky-400/40 flex items-center justify-center text-sky-400">
+                        ⚙️
+                    </span>
+                    <div>
+                        <h3 class="text-sm font-bold text-white">Postavke i prilagodba elementa</h3>
+                        <p id="cfg-block-id" class="text-[11px] mono text-sky-400"></p>
+                    </div>
+                </div>
+                <button onclick="closeBlockConfigModal()" class="text-slate-400 hover:text-white text-sm font-bold">✕</button>
+            </div>
+
+            <div class="space-y-3 text-xs">
+                <div>
+                    <label class="block text-[11px] font-bold uppercase text-slate-400 mono mb-1">Naziv bloka</label>
+                    <input id="cfg-title" type="text" class="w-full px-3 py-2 rounded-lg bg-[#0d1317] border border-slate-700 text-white font-semibold focus:outline-none focus:border-sky-400">
+                </div>
+                <div>
+                    <label class="block text-[11px] font-bold uppercase text-slate-400 mono mb-1">Kategorija / Oznaka</label>
+                    <input id="cfg-category" type="text" class="w-full px-3 py-2 rounded-lg bg-[#0d1317] border border-slate-700 text-slate-200 mono focus:outline-none focus:border-sky-400">
+                </div>
+                <div>
+                    <label class="block text-[11px] font-bold uppercase text-slate-400 mono mb-1">Tehnički opis / Parametri</label>
+                    <input id="cfg-subtitle" type="text" class="w-full px-3 py-2 rounded-lg bg-[#0d1317] border border-slate-700 text-slate-200 focus:outline-none focus:border-sky-400">
+                </div>
+                <div class="grid grid-cols-2 gap-2.5">
+                    <div>
+                        <label class="block text-[11px] font-bold uppercase text-slate-400 mono mb-1">Ulazni port (Lijevo)</label>
+                        <input id="cfg-in-label" type="text" class="w-full px-2.5 py-1.5 rounded-lg bg-[#0d1317] border border-slate-700 text-slate-300 mono">
+                    </div>
+                    <div>
+                        <label class="block text-[11px] font-bold uppercase text-slate-400 mono mb-1">Izlazni port (Desno)</label>
+                        <input id="cfg-out-label" type="text" class="w-full px-2.5 py-1.5 rounded-lg bg-[#0d1317] border border-slate-700 text-slate-300 mono">
+                    </div>
+                </div>
+                <div class="grid grid-cols-2 gap-2.5 pt-1">
+                    <div>
+                        <label class="block text-[11px] font-bold uppercase text-slate-400 mono mb-1">Simulacijski parametar</label>
+                        <input id="cfg-custom-param" type="text" placeholder="npr. Gain = 1.0, Ts = 10ms" class="w-full px-2.5 py-1.5 rounded-lg bg-[#0d1317] border border-slate-700 text-emerald-300 mono">
+                    </div>
+                    <div>
+                        <label class="block text-[11px] font-bold uppercase text-slate-400 mono mb-1">Boja zaglavlja</label>
+                        <input id="cfg-color" type="color" class="w-full h-8 rounded bg-[#0d1317] border border-slate-700 cursor-pointer">
+                    </div>
+                </div>
+            </div>
+
+            <div class="flex items-center justify-between mt-6 pt-3 border-t border-slate-800">
+                <button onclick="deleteCurrentConfiguredBlock()" class="px-3 py-2 rounded-lg bg-rose-950/60 hover:bg-rose-900/70 border border-rose-500/40 text-xs font-bold text-rose-300">
+                    Obriši element
+                </button>
+                <div class="flex gap-2">
+                    <button onclick="closeBlockConfigModal()" class="px-3.5 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-300">
+                        Odustani
+                    </button>
+                    <button onclick="saveBlockConfig()" class="px-4 py-2 rounded-lg bg-sky-500 hover:bg-sky-400 text-slate-950 text-xs font-extrabold">
+                        Spremi promjene
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- WARNING MODAL IF BLOCKS ARE NOT CONNECTED -->
+    <div id="incomplete-modal" class="hidden fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div class="bg-[#161f24] border border-amber-500/50 rounded-2xl max-w-md w-full p-6 shadow-2xl">
+            <div class="flex items-center gap-3 text-amber-400 mb-3">
+                <svg class="w-7 h-7 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+                <h3 class="text-base font-bold text-white">Simulink shema nije u potpunosti spojena!</h3>
+            </div>
+            <p class="text-xs text-slate-300 leading-relaxed mb-4">
+                Za pokretanje simulacije potrebno je spojiti sve obvezne hidrauličke i upravljačke blokove na radnoj površini (<span id="modal-missing-count" class="text-amber-300 font-bold"></span>).
+            </p>
+            <div class="flex justify-end gap-2.5">
+                <button onclick="closeIncompleteModal()" class="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-300">
+                    Spojit ću ručno
+                </button>
+                <button onclick="autoConnectAndRun()" class="px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold">
+                    Auto-spoji sve i pokreni
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- POPUP WINDOW: LIVE PERFUSOR SIMULATION & 7" HMI TOUCHSCREEN -->
+    <div id="sim-popup-modal" onclick="handleSimBackdropClick(event)" class="hidden fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex flex-col items-center justify-start overflow-y-auto py-4 px-4 cursor-pointer">
+        
+        <!-- Popup Window Header Bar -->
+        <div onclick="event.stopPropagation()" class="max-w-[1240px] w-full bg-[#151d22] border border-[#293842] rounded-t-2xl px-5 py-3 flex flex-wrap items-center justify-between gap-3 shadow-xl cursor-default">
+            <div>
+                <div class="flex items-center gap-2">
+                    <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                    <span class="text-[11px] mono font-bold uppercase tracking-wider text-emerald-400">AKTIVNA SIMULACIJA (100 Hz Real-Time Solver)</span>
+                </div>
+                <h2 class="text-sm md:text-base font-bold text-white">
+                    Sveučilište u Rijeci, Medicinski fakultet, Centar za biomodeliranje i inovacije u medicini
+                </h2>
+            </div>
+
+            <div class="flex items-center gap-3 text-xs mono">
+                <div class="px-2.5 py-1 bg-[#0d1316] rounded border border-slate-800">
+                    <span class="text-slate-400">Pump 1:</span> <span id="sim-p1-hz" class="text-teal-400 font-bold">0 Hz</span>
+                </div>
+                <div class="px-2.5 py-1 bg-[#0d1316] rounded border border-slate-800">
+                    <span class="text-slate-400">Pump 2:</span> <span id="sim-p2-hz" class="text-sky-400 font-bold">0 Hz</span>
+                </div>
+                <div class="px-2.5 py-1 bg-[#0d1316] rounded border border-slate-800">
+                    <span class="text-slate-400">cpu_us:</span> <span id="sim-cpu-us" class="text-emerald-400 font-bold">1420 µs</span>
+                </div>
+                <button onclick="closeSimulationPopup()" class="px-3.5 py-1.5 rounded-lg bg-rose-500/20 hover:bg-rose-500/35 border border-rose-500/40 text-rose-200 font-bold flex items-center gap-1.5 cursor-pointer">
+                    <span>✕ Zatvori simulaciju</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- 7" Raspberry Pi Touchscreen Frame -->
+        <div onclick="event.stopPropagation()" class="overflow-x-auto max-w-full my-2 cursor-default">
+            <div class="hmi-frame">
+                
+                <!-- TOP STATUS BAR -->
+                <div id="status-bar" class="h-12 px-6 bg-[#171f24] border-b border-[#242f35] flex items-center justify-between transition-colors duration-200">
+                    <div class="flex items-center gap-4">
+                        <span class="mono font-bold tracking-wider text-slate-200 text-sm">PERFUSOR · UNIRI MEDRI</span>
+                        <span id="mode-badge" class="mono text-xs font-bold px-3.5 py-0.5 rounded-full bg-slate-700/60 text-slate-300 border border-slate-500">
+                            RUNNING
+                        </span>
+                        <span id="alarm-banner-text" class="text-xs text-slate-400 font-medium">
+                            No active alarms
+                        </span>
+                    </div>
+                    <div class="flex items-center gap-5 text-xs text-slate-300">
+                        <div class="flex items-center gap-1.5">
+                            <span id="ind-link" class="w-2.5 h-2.5 rounded-full bg-emerald-400 shadow-[0_0_8px_#34d399]"></span>
+                            <span>Arduino link</span>
+                        </div>
+                        <div class="flex items-center gap-1.5">
+                            <span id="ind-sensors" class="w-2.5 h-2.5 rounded-full bg-emerald-400 shadow-[0_0_8px_#34d399]"></span>
+                            <span>Sensors</span>
+                        </div>
+                        <div class="flex items-center gap-1.5">
+                            <span id="ind-drivers" class="w-2.5 h-2.5 rounded-full bg-emerald-400 shadow-[0_0_8px_#34d399]"></span>
+                            <span>Drivers</span>
+                        </div>
+                        <span id="clock-display" class="mono text-xs font-semibold text-slate-200 ml-1">14:32</span>
+                    </div>
+                </div>
+
+                <!-- MAIN CONTENT AREA -->
+                <div class="flex-1 p-4 overflow-hidden relative">
+                    
+                    <!-- TAB 1: RUN SCREEN -->
+                    <div id="tab-run" class="h-full grid grid-cols-12 gap-4">
+                        
+                        <!-- Left Column: Setpoints & Controls (5 cols) -->
+                        <div class="col-span-5 flex flex-col justify-between h-full">
+                            
+                            <!-- Pressure Setpoint Card -->
+                            <div class="card p-3.5 flex items-center justify-between">
+                                <div>
+                                    <div class="mono text-xs text-slate-400 tracking-wide">PRESSURE SETPOINT · P_GC</div>
+                                    <div class="mt-0.5 flex items-baseline gap-2">
+                                        <span id="ui-sp-press" class="mono text-4xl font-bold text-white">350</span>
+                                        <span class="mono text-xs text-slate-400">mmHg</span>
+                                    </div>
+                                    <div class="mono text-[11px] text-slate-400 mt-1">
+                                        range 0–350 · ramps at 50 mmHg/s
+                                        <span id="pending-press-tag" class="hidden ml-1 text-amber-400 font-semibold">(unapplied)</span>
+                                    </div>
+                                </div>
+                                <div class="flex gap-2">
+                                    <button onclick="adjustSetpoint('press', -10)" class="btn-touch w-14 h-14 rounded-lg bg-[#202a30] hover:bg-[#29363d] border border-[#314048] mono font-bold text-white text-sm">-10</button>
+                                    <button onclick="adjustSetpoint('press', 10)" class="btn-touch w-14 h-14 rounded-lg bg-[#202a30] hover:bg-[#29363d] border border-[#314048] mono font-bold text-white text-sm">+10</button>
+                                </div>
+                            </div>
+
+                            <!-- Flow Setpoint Card -->
+                            <div class="card p-3.5 flex items-center justify-between">
+                                <div>
+                                    <div class="mono text-xs text-slate-400 tracking-wide">FLOW SETPOINT</div>
+                                    <div class="mt-0.5 flex items-baseline gap-2">
+                                        <span id="ui-sp-flow" class="mono text-4xl font-bold text-white">7.00</span>
+                                        <span class="mono text-xs text-slate-400">L/min</span>
+                                    </div>
+                                    <div class="mono text-[11px] text-slate-400 mt-1">
+                                        range 0–7 · ramps at 1 L/min/s
+                                        <span id="pending-flow-tag" class="hidden ml-1 text-amber-400 font-semibold">(unapplied)</span>
+                                    </div>
+                                </div>
+                                <div class="flex gap-2">
+                                    <button onclick="adjustSetpoint('flow', -0.5)" class="btn-touch w-14 h-14 rounded-lg bg-[#202a30] hover:bg-[#29363d] border border-[#314048] mono font-bold text-white text-sm">-0.5</button>
+                                    <button onclick="adjustSetpoint('flow', 0.5)" class="btn-touch w-14 h-14 rounded-lg bg-[#202a30] hover:bg-[#29363d] border border-[#314048] mono font-bold text-white text-sm">+0.5</button>
+                                </div>
+                            </div>
+
+                            <!-- Apply Setpoints Button -->
+                            <button id="btn-apply" onclick="applySetpoints()" class="btn-touch w-full py-3 rounded-lg bg-[#162229] hover:bg-[#1c2d36] border-2 border-[#3898cf] mono text-xs font-bold tracking-wider text-[#63b3ed]">
+                                APPLY SETPOINTS
+                            </button>
+
+                            <!-- 4 Action Buttons: PRIME, START, PAUSE, STOP -->
+                            <div class="grid grid-cols-4 gap-2.5">
+                                <button id="btn-prime" onclick="sendCommand('PRIME')" class="btn-touch h-14 rounded-lg bg-[#162229] hover:bg-[#1e2f38] border-2 border-[#3898cf] mono text-xs font-bold text-[#63b3ed]">
+                                    PRIME
+                                </button>
+                                <button id="btn-start" onclick="sendCommand('START')" class="btn-touch h-14 rounded-lg bg-[#38c18c] hover:bg-[#2eaa79] mono text-xs font-bold text-[#092218]">
+                                    START
+                                </button>
+                                <button id="btn-pause" onclick="sendCommand('PAUSE')" class="btn-touch h-14 rounded-lg bg-[#eab338] hover:bg-[#d69e26] mono text-xs font-bold text-[#241a04]">
+                                    PAUSE
+                                </button>
+                                <button id="btn-stop" onclick="sendCommand('STOP')" class="btn-touch h-14 rounded-lg bg-[#f25c54] hover:bg-[#e04840] mono text-xs font-bold text-[#290907]">
+                                    STOP
+                                </button>
+                            </div>
+
+                            <!-- Reset Alarm Button -->
+                            <div>
+                                <button id="btn-reset" onclick="sendCommand('RESET')" disabled class="btn-touch w-full py-3 rounded-lg bg-[#192125] border border-[#2d3a42] mono text-xs font-bold text-slate-400">
+                                    RESET ALARM
+                                </button>
+                                <div class="text-[11px] text-slate-400 mt-1">
+                                    Reset is enabled only in ALARM, once the fault has cleared.
+                                </div>
+                            </div>
+
+                        </div>
+
+                        <!-- Right Column: Live Telemetry & 60s Graphs (7 cols) -->
+                        <div class="col-span-7 flex flex-col justify-between h-full">
+                            
+                            <!-- 6 Metric Cards -->
+                            <div class="grid grid-cols-6 gap-2">
+                                <div class="card p-2">
+                                    <div class="mono text-[10px] text-slate-400">P1 mmHg</div>
+                                    <div id="tel-p1" class="mono text-xl font-bold text-white mt-0.5">385</div>
+                                </div>
+                                <div class="card p-2">
+                                    <div class="mono text-[10px] text-slate-400">P2 mmHg</div>
+                                    <div id="tel-p2" class="mono text-xl font-bold text-white mt-0.5">315</div>
+                                </div>
+                                <div class="card p-2">
+                                    <div class="mono text-[10px] text-slate-400">P_GC mmHg</div>
+                                    <div id="tel-pgc" class="mono text-xl font-bold text-white mt-0.5">350.0</div>
+                                </div>
+                                <div class="card p-2">
+                                    <div class="mono text-[10px] text-slate-400">FLOW L/min</div>
+                                    <div id="tel-flow" class="mono text-xl font-bold text-white mt-0.5">7.00</div>
+                                </div>
+                                <div class="card p-2">
+                                    <div class="mono text-[10px] text-slate-400">VOLUME L</div>
+                                    <div id="tel-vol" class="mono text-xl font-bold text-white mt-0.5">7.17</div>
+                                </div>
+                                <div class="card p-2">
+                                    <div class="mono text-[10px] text-slate-400">RUNTIME</div>
+                                    <div id="tel-runtime" class="mono text-xl font-bold text-white mt-0.5">01:15</div>
+                                </div>
+                            </div>
+
+                            <!-- Top Chart: PRESSURE · LAST 60 s -->
+                            <div class="flex-1 flex flex-col mt-2.5">
+                                <div class="flex justify-between items-center mono text-xs mb-1 px-1">
+                                    <span class="text-slate-400">PRESSURE · LAST 60 s</span>
+                                    <div class="flex items-center gap-3 text-[11px]">
+                                        <span class="text-[#eab338]">— P1</span>
+                                        <span class="text-white">— P_GC</span>
+                                        <span class="text-[#569cd6]">— P2</span>
+                                        <span class="text-slate-400">- - setpoint</span>
+                                    </div>
+                                </div>
+                                <div class="relative flex-1 bg-[#151c20] border border-[#222c32] rounded-lg overflow-hidden">
+                                    <canvas id="chart-pressure" width="680" height="200" class="w-full h-full"></canvas>
+                                </div>
+                            </div>
+
+                            <!-- Bottom Chart: FLOW & VOLUME -->
+                            <div class="h-40 flex flex-col mt-2.5">
+                                <div class="flex justify-between items-center mono text-xs mb-1 px-1">
+                                    <span class="text-slate-400">FLOW & VOLUME</span>
+                                    <div class="flex items-center gap-3 text-[11px]">
+                                        <span class="text-[#569cd6]">— flow L/min (left)</span>
+                                        <span class="text-[#38c18c]">— volume L (0–10)</span>
+                                    </div>
+                                </div>
+                                <div class="relative flex-1 bg-[#151c20] border border-[#222c32] rounded-lg overflow-hidden">
+                                    <canvas id="chart-flow" width="680" height="135" class="w-full h-full"></canvas>
+                                </div>
+                            </div>
+
+                        </div>
+                    </div>
+
+                    <!-- TAB 2: TRENDS & SERIAL MONITOR -->
+                    <div id="tab-trends" class="hidden h-full flex flex-col justify-between gap-4">
+                        <div class="grid grid-cols-2 gap-4 flex-1 overflow-hidden">
+                            <div class="card p-4 flex flex-col h-full">
+                                <div class="flex justify-between items-center mb-2">
+                                    <span class="mono text-xs font-bold text-teal-400">USB SERIAL MONITOR (250 kBd · $SET 10Hz ↔ $TEL 20Hz)</span>
+                                    <button onclick="exportCSV()" class="px-3 py-1 bg-teal-600/20 hover:bg-teal-600/30 text-teal-300 border border-teal-500/40 rounded mono text-xs">
+                                        Export Telemetry CSV
+                                    </button>
+                                </div>
+                                <div id="serial-monitor" class="flex-1 bg-[#0e1315] p-3 rounded border border-slate-800 mono text-xs text-slate-300 overflow-y-auto space-y-1">
+                                </div>
+                            </div>
+                            <div class="card p-4 flex flex-col justify-between h-full mono text-xs">
+                                <div>
+                                    <div class="font-bold text-sky-400 mb-2">ACTIVE SIMULINK STATEFLOW & CONTROL LAW PARAMETERS</div>
+                                    <div class="space-y-2 text-slate-300">
+                                        <div class="p-2.5 bg-[#12171a] rounded border border-slate-800">
+                                            <span class="text-slate-400">Glomerular Pressure Equation:</span><br>
+                                            <span class="text-white">P_GC = 0.5 * (P1 + P2)</span>
+                                        </div>
+                                        <div class="p-2.5 bg-[#12171a] rounded border border-slate-800">
+                                            <span class="text-slate-400">Capillary Bed Flow Equation:</span><br>
+                                            <span class="text-white">Q = (P1 - P2) / R_capillary</span>
+                                        </div>
+                                        <div class="p-2.5 bg-[#12171a] rounded border border-slate-800">
+                                            <span class="text-slate-400">Control Law (100 Hz Arduino Loop):</span><br>
+                                            <span>• Common Pump Speed → controls Flow (Feed-forward + Integral trim)</span><br>
+                                            <span>• Differential Speed (Pump 1 - Pump 2) → controls P_GC via Air Cushions C1 & C2</span>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="text-slate-400 text-[11px]">
+                                    Sveučilište u Rijeci · Medicinski fakultet · Centar za biomodeliranje i inovacije u medicini
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- TAB 3: ALARM LOG -->
+                    <div id="tab-alarms" class="hidden h-full flex flex-col">
+                        <div class="card p-4 flex-1 flex flex-col overflow-hidden">
+                            <div class="flex justify-between items-center mb-3">
+                                <span class="mono text-sm font-bold text-slate-200">TIMESTAMPED ALARM WORD LOG</span>
+                                <button onclick="clearAlarmLog()" class="px-3 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded mono text-xs">Clear Log</button>
+                            </div>
+                            <div id="alarm-log-list" class="flex-1 overflow-y-auto mono text-xs space-y-2 pr-2">
+                                <div class="text-slate-500">System initialized. No fault events recorded.</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- TAB 4: CALIBRATION -->
+                    <div id="tab-calibration" class="hidden h-full grid grid-cols-3 gap-4">
+                        <div class="card p-4 flex flex-col justify-between">
+                            <div>
+                                <div class="mono text-xs text-slate-400">PUMP DISPLACEMENT CALIBRATION</div>
+                                <div class="mono text-2xl font-bold text-white mt-2"><span id="cal-ml-val">3.50</span> mL/rev</div>
+                                <p class="text-xs text-slate-400 mt-2">
+                                    Sets the feed-forward gain between NEMA23 stepper frequency (via 3:1 HTD-3M belt) and volumetric flow rate.
+                                </p>
+                            </div>
+                            <input type="range" min="2.0" max="5.0" step="0.1" value="3.5" oninput="updateCal('ml', this.value)" class="w-full accent-sky-400">
+                        </div>
+
+                        <div class="card p-4 flex flex-col justify-between">
+                            <div>
+                                <div class="mono text-xs text-slate-400">CAPILLARY RESISTANCE (R)</div>
+                                <div class="mono text-2xl font-bold text-white mt-2"><span id="cal-r-val">10.0</span> mmHg/(L/min)</div>
+                                <p class="text-xs text-slate-400 mt-2">
+                                    Represents the Hoffman clamp / filter module resistance. At 7 L/min and R=10, ΔP = 70 mmHg (P1=385, P2=315 for P_GC=350).
+                                </p>
+                            </div>
+                            <input id="cal-r-slider" type="range" min="4.0" max="35.0" step="0.5" value="10.0" oninput="updateCal('r', this.value)" class="w-full accent-sky-400">
+                        </div>
+
+                        <div class="card p-4 flex flex-col justify-between">
+                            <div>
+                                <div class="mono text-xs text-slate-400">MS5837 PRESSURE ZERO</div>
+                                <div class="mono text-2xl font-bold text-emerald-400 mt-2">Auto-Zero OK</div>
+                                <p class="text-xs text-slate-400 mt-2">
+                                    Re-runs the 2-second atmospheric auto-zero routine (INIT - 0 state) when pumps are stopped.
+                                </p>
+                            </div>
+                            <button onclick="triggerAutoZero()" class="btn-touch py-3 rounded bg-sky-600/20 border border-sky-500/40 text-sky-300 mono text-xs font-bold">
+                                ZERO SENSORS NOW
+                            </button>
+                        </div>
+                    </div>
+
+                </div>
+
+                <!-- BOTTOM NAVIGATION BAR -->
+                <div class="h-11 px-8 bg-[#161d21] border-t border-[#232e34] flex items-center gap-10 mono text-xs font-semibold">
+                    <button onclick="switchTab('run')" id="nav-run" class="h-full border-b-2 border-[#3898cf] text-white px-2">RUN</button>
+                    <button onclick="switchTab('trends')" id="nav-trends" class="h-full border-b-2 border-transparent text-slate-400 hover:text-slate-200 px-2">TRENDS</button>
+                    <button onclick="switchTab('alarms')" id="nav-alarms" class="h-full border-b-2 border-transparent text-slate-400 hover:text-slate-200 px-2">ALARM LOG</button>
+                    <button onclick="switchTab('calibration')" id="nav-calibration" class="h-full border-b-2 border-transparent text-slate-400 hover:text-slate-200 px-2">CALIBRATION</button>
+                </div>
+
+            </div>
+        </div>
+
+        <!-- PHYSICAL PLANT & FAULT INJECTION BENCH INSIDE POPUP -->
+        <div onclick="event.stopPropagation()" class="max-w-[1240px] w-full bg-[#151d22] p-4 rounded-b-2xl border border-[#293842] cursor-default">
+            <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-3 gap-2">
+                <div>
+                    <h3 class="text-xs font-bold uppercase tracking-wider text-amber-400 mono">Ispitni stol za ubacivanje kvarova (Fault Injection - Sheet 1 & Sheet 2)</h3>
+                    <p class="text-[11px] text-slate-400">Simulirajte začepljenje kapilare, mjehurić zraka, zastoj stepper motora ili E-Stop tipku u stvarnom vremenu.</p>
+                </div>
+                <button onclick="clearAllFaults()" class="px-3 py-1 rounded bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 mono text-xs font-bold">
+                    Očisti sve kvarove
+                </button>
+            </div>
+
+            <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 mono text-xs">
+                <button onclick="injectPressureSpike(475)" class="p-2.5 rounded-lg bg-[#1d262b] hover:bg-[#253138] border border-red-500/30 text-left transition">
+                    <div class="font-bold text-red-400">Ugrušak (>450)</div>
+                    <div class="text-[10px] text-slate-400 mt-0.5">Pali <span class="text-white">REVERSE</span></div>
+                </button>
+                <button onclick="injectPressureSpike(432)" class="p-2.5 rounded-lg bg-[#1d262b] hover:bg-[#253138] border border-amber-500/30 text-left transition">
+                    <div class="font-bold text-amber-400">Visoki tlak (>420)</div>
+                    <div class="text-[10px] text-slate-400 mt-0.5">Pali <span class="text-white">RELIEVE_FWD</span></div>
+                </button>
+                <button onclick="injectPressureSpike(-95)" class="p-2.5 rounded-lg bg-[#1d262b] hover:bg-[#253138] border border-sky-500/30 text-left transition">
+                    <div class="font-bold text-sky-400">Podtlak (<-80)</div>
+                    <div class="text-[10px] text-slate-400 mt-0.5">Pali <span class="text-white">RELIEVE_BACK</span></div>
+                </button>
+                <button id="fault-air" onclick="toggleLatchedFault('air')" class="p-2.5 rounded-lg bg-[#1d262b] hover:bg-[#253138] border border-slate-700 text-left transition">
+                    <div class="font-bold text-slate-200">Mjehurić zraka (Pin 23)</div>
+                    <div class="text-[10px] text-slate-400 mt-0.5">Stanje: <span id="fault-air-status" class="text-emerald-400">CLEAR</span></div>
+                </button>
+                <button id="fault-stall" onclick="toggleLatchedFault('stall')" class="p-2.5 rounded-lg bg-[#1d262b] hover:bg-[#253138] border border-slate-700 text-left transition">
+                    <div class="font-bold text-slate-200">Hall Stall (Pin 2/3)</div>
+                    <div class="text-[10px] text-slate-400 mt-0.5">Stanje: <span id="fault-stall-status" class="text-emerald-400">NORMAL</span></div>
+                </button>
+                <button id="fault-estop" onclick="toggleLatchedFault('estop')" class="p-2.5 rounded-lg bg-[#1d262b] hover:bg-[#253138] border border-slate-700 text-left transition">
+                    <div class="font-bold text-rose-400">E-STOP (Pin 22)</div>
+                    <div class="text-[10px] text-slate-400 mt-0.5">Stanje: <span id="fault-estop-status" class="text-emerald-400">RELEASED</span></div>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ============================================================================
+        // 0. LOGIN GATE LOGIC
+        // ============================================================================
+        function getExpectedDatePasswords() {
+            const now = new Date();
+            const yy = String(now.getFullYear()).slice(-2);
+            const dd = String(now.getDate()).padStart(2, '0');
+            const mm = String(now.getMonth() + 1).padStart(2, '0');
+            return [`${yy}${dd}`, `${yy}${mm}`];
+        }
+
+        function handleLogin(e) {
+            e.preventDefault();
+            const user = document.getElementById('login-username').value.trim();
+            const pass = document.getElementById('login-password').value.trim();
+            const errBox = document.getElementById('login-error');
+            const validPasses = getExpectedDatePasswords();
+
+            if (user === 'medri.simulacija' && validPasses.includes(pass)) {
+                errBox.classList.add('hidden');
+                document.getElementById('login-screen').classList.add('hidden');
+            } else {
+                errBox.classList.remove('hidden');
+                document.getElementById('login-password').value = '';
+                document.getElementById('login-password').focus();
+            }
+        }
+
+        // ============================================================================
+        // 1. EXPANDED COMPONENT LIBRARY & PROJEKTMARKO PRESET
+        // ============================================================================
+
+        // SVG Icons for library & canvas blocks
+        const BLOCK_ICONS = {
+            reservoir: '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2"/></svg>',
+            pump: '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>',
+            capillary: '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>',
+            power: '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>',
+            sensor: '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>',
+            alarm: '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>',
+            stateflow: '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>',
+            controller: '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"/></svg>',
+            hmi: '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>',
+            cushion: '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z"/></svg>',
+            scope: '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z"/></svg>'
+        };
+
+        // Default ProjektMarko 10 Core Blocks
+        const projektMarkoTemplate = [
+            {
+                id: 'reservoir',
+                iconKey: 'reservoir',
+                title: 'Reservoir & Air Sensor',
+                category: 'HIDRAULIKA · SHEET 1',
+                color: '#0284c7',
+                x: 45, y: 110,
+                subtitle: 'Spremnik 1–2 L + Optički senzor zraka (Pin 23)',
+                inLabel: 'Povratni vod',
+                outLabel: '3/8" Silikon izlaz',
+                customParam: 'V = 1.5 L, Pin = D23'
+            },
+            {
+                id: 'pump1',
+                iconKey: 'pump',
+                title: 'Afferent Pump 1',
+                category: 'AKTIVATOR · SHEET 1',
+                color: '#0d9488',
+                x: 325, y: 110,
+                subtitle: 'DM556 #1 · NEMA23 (1.2 Nm) · HTD-3M 3:1 + C1',
+                inLabel: 'Ulaz tekućine / STEP 6',
+                outLabel: 'Tlak P1 (MS5837 ch0)',
+                customParam: '3.5 mL/rev, Ratio 3:1'
+            },
+            {
+                id: 'capillary',
+                iconKey: 'capillary',
+                title: 'R · Capillary Bed',
+                category: 'BIOMODEL · SHEET 1',
+                color: '#0284c7',
+                x: 615, y: 110,
+                subtitle: '"Glomerul" P_GC = ½(P1+P2) · Q = (P1-P2)/R',
+                inLabel: 'Aferentni ulaz (P1)',
+                outLabel: 'Eferentni izlaz (P2)',
+                customParam: 'R = 10.0 mmHg/(L/min)'
+            },
+            {
+                id: 'pump2',
+                iconKey: 'pump',
+                title: 'Efferent Pump 2',
+                category: 'AKTIVATOR · SHEET 1',
+                color: '#0d9488',
+                x: 905, y: 110,
+                subtitle: 'DM556 #2 · NEMA23 (1.2 Nm) · HTD-3M 3:1 + C2',
+                inLabel: 'Izlaz kapilare / STEP 46',
+                outLabel: 'Povrat / P2 (MS5837 ch1)',
+                customParam: '3.5 mL/rev, Ratio 3:1'
+            },
+            {
+                id: 'psu_estop',
+                iconKey: 'power',
+                title: '24 V PSU & E-STOP',
+                category: 'NAPAJANJE · SHEET 1',
+                color: '#e11d48',
+                x: 45, y: 345,
+                subtitle: '350 W (10 A) · NC reže napajanje motora · Pin 22',
+                inLabel: 'Mrežni ulaz 230V',
+                outLabel: '24V Bus & E-Stop status',
+                customParam: 'U = 24V DC, I_max = 10A'
+            },
+            {
+                id: 'sensors_mux',
+                iconKey: 'sensor',
+                title: 'Sensors & TCA9548A',
+                category: 'SIMULINK · SHEET 2',
+                color: '#10b981',
+                x: 325, y: 345,
+                subtitle: 'I2C Mux 0x70 · MS5837 ×2 · Hall RPM (Pin 2, 3)',
+                inLabel: 'P1, P2, Hall, Zrak',
+                outLabel: 'P1, P2, P_GC, Q (20ms filt)',
+                customParam: 'I2C = 0x70 / 0x76, tau = 20ms'
+            },
+            {
+                id: 'alarm_detect',
+                iconKey: 'alarm',
+                title: 'AlarmDetect Block',
+                category: 'SIMULINK · SHEET 2',
+                color: '#f59e0b',
+                x: 615, y: 345,
+                subtitle: '>450 Rev · >420 Fwd · <-80 Back · Stall · Air',
+                inLabel: 'Senzori & E-Stop',
+                outLabel: 'alarm_word (16-bit)',
+                customParam: 'P_max = 450 mmHg, P_min = -80'
+            },
+            {
+                id: 'supervisor',
+                iconKey: 'stateflow',
+                title: 'Supervisor (Stateflow)',
+                category: 'STATEFLOW · SHEET 2',
+                color: '#8b5cf6',
+                x: 325, y: 565,
+                subtitle: 'INIT(0) · IDLE(1) · PRIME(2) · RUN(3) · PAUSE(4) · ALARM(5)',
+                inLabel: 'alarm_word & $SET',
+                outLabel: 'mode, targets, overrides',
+                customParam: 'States = 6, InitZero = 2.0s'
+            },
+            {
+                id: 'control_law',
+                iconKey: 'controller',
+                title: 'ControlLaw (100 Hz PI)',
+                category: 'SIMULINK · SHEET 2',
+                color: '#3b82f6',
+                x: 615, y: 565,
+                subtitle: 'Rampe (50 mmHg/s) · FF protok + PI razlika brzina',
+                inLabel: 'mode, P_GC, Q, targets',
+                outLabel: '±step Hz (Timer 4/5), ENA',
+                customParam: 'Ts = 10ms, Kp = 0.08'
+            },
+            {
+                id: 'rpi_hmi',
+                iconKey: 'hmi',
+                title: 'Raspberry Pi 5 HMI',
+                category: 'TOUCHSCREEN · SHEET 3',
+                color: '#ec4899',
+                x: 960, y: 455,
+                subtitle: '7" Touch Display (1280×720) · USB Serial 250 kBd',
+                inLabel: '$TEL (20 Hz telemetrija)',
+                outLabel: '$SET (10 Hz setpointi)',
+                customParam: 'Baud = 250000, Watchdog = 1s'
+            }
+        ];
+
+        // Additional Extra Library Components (so the left library has 18 rich items)
+        const extraLibraryCatalog = [
+            ...projektMarkoTemplate,
+            {
+                id: 'air_cushion_c1',
+                iconKey: 'cushion',
+                title: 'Air Cushion C1 / C2',
+                category: 'HIDRAULIKA · KOMPLIJANSA',
+                color: '#0ea5e9',
+                x: 470, y: 230,
+                subtitle: 'Zračni jastuk za prigušenje pulzacija tlaka',
+                inLabel: 'Ulazni tlak',
+                outLabel: 'Filtrirani tlak',
+                customParam: 'C = 0.035 mL/mmHg'
+            },
+            {
+                id: 'nema23_stepper',
+                iconKey: 'pump',
+                title: 'NEMA23 Stepper & HTD-3M',
+                category: 'POGON · MEHANIKA',
+                color: '#14b8a6',
+                x: 190, y: 230,
+                subtitle: 'Koračni motor 1.2 Nm + remenica 15T:45T (3:1)',
+                inLabel: 'A± B± struja',
+                outLabel: 'Mehanički okretni moment',
+                customParam: 'Torque = 1.2 Nm, 4 magneta'
+            },
+            {
+                id: 'hall_rpm_sensor',
+                iconKey: 'sensor',
+                title: 'Hall RPM Sensor (ISR)',
+                category: 'SENZOR · DETEKCIJA ZASTOJA',
+                color: '#22c55e',
+                x: 190, y: 460,
+                subtitle: '4 magneta po rotoru · Prekidna rutina Pin 2 / 3',
+                inLabel: 'Magnetno polje rotora',
+                outLabel: 'RPM / Stall flag',
+                customParam: 'Pulses/rev = 4, ISR = CHANGE'
+            },
+            {
+                id: 'ms5837_sensor',
+                iconKey: 'sensor',
+                title: 'MS5837 Tlačni Senzor',
+                category: 'SENZOR · I2C 0x76',
+                color: '#10b981',
+                x: 470, y: 460,
+                subtitle: 'Apsolutni tlak i temperatura (osvježavanje 0.5 s)',
+                inLabel: 'Tlak tekućine',
+                outLabel: 'I2C digitalni izlaz',
+                customParam: 'Range = -100..500 mmHg'
+            },
+            {
+                id: 'buzzer_d4184',
+                iconKey: 'alarm',
+                title: 'D4184 MOSFET & Buzzer',
+                category: 'ALARM · ZVUČNI SIGNAL',
+                color: '#f43f5e',
+                x: 905, y: 310,
+                subtitle: 'Zvučni alarm 95 dB (24 V) upravljan s Pin 30',
+                inLabel: 'Digitalni izlaz Pin 30',
+                outLabel: '95 dB Zvučni val',
+                customParam: 'SPL = 95 dB, U = 24V'
+            },
+            {
+                id: 'lowpass_filter',
+                iconKey: 'controller',
+                title: 'Low-Pass Filter (20 ms)',
+                category: 'DSP · FILTRIRANJE',
+                color: '#6366f1',
+                x: 760, y: 345,
+                subtitle: 'Diskretni filtar prvog reda za uklanjanje šuma',
+                inLabel: 'Sirovi signal u(k)',
+                outLabel: 'Filtrirani y(k)',
+                customParam: 'Tf = 0.02 s, Ts = 0.01 s'
+            },
+            {
+                id: 'watchdog_timer',
+                iconKey: 'stateflow',
+                title: 'Comm Watchdog (1.0 s)',
+                category: 'SIGURNOST · NADZOR VEZE',
+                color: '#eab308',
+                x: 760, y: 565,
+                subtitle: 'Prebacuje u PAUSED ako nema $SET poruke > 1 s',
+                inLabel: 'RX $SET heartbeat',
+                outLabel: 'comm_timeout flag',
+                customParam: 'Timeout = 1000 ms'
+            },
+            {
+                id: 'simulink_scope',
+                iconKey: 'scope',
+                title: 'Signal Scope (P1, P2, Q)',
+                category: 'DIJAGNOSTIKA · OSCILOSKOP',
+                color: '#a855f7',
+                x: 1150, y: 260,
+                subtitle: 'Praćenje valnih oblika tlaka i protoka u vremenu',
+                inLabel: 'Sabirnica signala',
+                outLabel: 'CSV / Graf izlaz',
+                customParam: 'Window = 60 s, Fs = 20 Hz'
+            }
+        ];
+
+        // Active blocks currently placed on the workspace canvas (Starts EMPTY as requested!)
+        let simBlocks = [];
+
+        // 12 Mandatory logical connections representing Sheet 1, 2, 3
+        const requiredConnections = [
+            { from: 'reservoir', to: 'pump1', label: 'Reservoir → Afferent Pump 1 (Dobava)', color: '#38bdf8' },
+            { from: 'pump1', to: 'capillary', label: 'Pump 1 → R Capillary Bed (Ulazni tlak P1)', color: '#38bdf8' },
+            { from: 'capillary', to: 'pump2', label: 'R Capillary Bed → Efferent Pump 2 (Izlaz P2)', color: '#38bdf8' },
+            { from: 'pump2', to: 'reservoir', label: 'Pump 2 → Reservoir (Povratni vod)', color: '#38bdf8' },
+            { from: 'pump1', to: 'sensors_mux', label: 'MS5837 #1 & Hall #1 → TCA9548A Sensors', color: '#10b981' },
+            { from: 'pump2', to: 'sensors_mux', label: 'MS5837 #2 & Hall #2 → TCA9548A Sensors', color: '#10b981' },
+            { from: 'psu_estop', to: 'alarm_detect', label: '24V PSU & E-STOP (Pin 22) → AlarmDetect', color: '#f43f5e' },
+            { from: 'sensors_mux', to: 'alarm_detect', label: 'Sensors (P1, P2, Q) → AlarmDetect', color: '#10b981' },
+            { from: 'alarm_detect', to: 'supervisor', label: 'AlarmDetect → Supervisor (Stateflow)', color: '#f59e0b' },
+            { from: 'supervisor', to: 'control_law', label: 'Supervisor → ControlLaw (100 Hz PI)', color: '#f59e0b' },
+            { from: 'control_law', to: 'pump1', label: 'ControlLaw (Timer4/5) → Pumpe DM556 STEP/DIR', color: '#a855f7' },
+            { from: 'control_law', to: 'rpi_hmi', label: 'Arduino Mega ↔ Raspberry Pi 5 ($TEL / $SET)', color: '#ec4899' }
+        ];
+
+        let activeConnections = [];
+        let selectedSourceBlock = null;
+        let draggingBlock = null;
+        let dragOffsetX = 0;
+        let dragOffsetY = 0;
+        let currentEditingBlockId = null;
+
+        function renderLibraryPalette() {
+            const paletteEl = document.getElementById('library-palette');
+            if (!paletteEl) return;
+            paletteEl.innerHTML = '';
+
+            extraLibraryCatalog.forEach(item => {
+                const isAlreadyOnCanvas = simBlocks.some(b => b.id === item.id);
+                const row = document.createElement('div');
+                row.className = 'p-2 rounded-lg bg-[#161f26] hover:bg-[#1d2932] border border-[#263540] flex items-center justify-between gap-2 cursor-grab active:cursor-grabbing transition group';
+                row.setAttribute('draggable', 'true');
+                row.onclick = () => addLibraryBlockToCanvas(item.id);
+                row.addEventListener('dragstart', (e) => {
+                    e.dataTransfer.setData('text/plain', item.id);
+                    e.dataTransfer.effectAllowed = 'copy';
+                });
+
+                const iconSvg = BLOCK_ICONS[item.iconKey] || BLOCK_ICONS.sensor;
+                row.innerHTML = `
+                    <div class="flex items-center gap-2.5 min-w-0 pointer-events-none">
+                        <div class="w-7 h-7 rounded-md flex items-center justify-center shrink-0" style="background: ${item.color}25; color: ${item.color}; border: 1px solid ${item.color}55;">
+                            ${iconSvg}
+                        </div>
+                        <div class="min-w-0">
+                            <div class="text-xs font-bold text-slate-200 truncate group-hover:text-white">${item.title}</div>
+                            <div class="text-[10px] text-slate-400 mono truncate">${item.category}</div>
+                        </div>
+                    </div>
+                    <span class="px-2 py-0.5 rounded text-[10px] mono font-bold shrink-0 pointer-events-none ${isAlreadyOnCanvas ? 'bg-emerald-500/20 text-emerald-300' : 'bg-slate-800 text-sky-400 group-hover:bg-sky-500 group-hover:text-slate-950'}">
+                        ${isAlreadyOnCanvas ? 'Na platnu' : '+ Dodaj'}
+                    </span>
+                `;
+                paletteEl.appendChild(row);
+            });
+        }
+
+        function handleCanvasDragOver(e) {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'copy';
+        }
+
+        function handleCanvasDrop(e) {
+            e.preventDefault();
+            const templateId = e.dataTransfer.getData('text/plain');
+            if (!templateId) return;
+
+            const canvas = document.getElementById('simulink-canvas');
+            const rect = canvas.getBoundingClientRect();
+            const dropX = e.clientX - rect.left - 102; // center 205px block under cursor
+            const dropY = e.clientY - rect.top - 45;   // center block vertically under cursor
+
+            addLibraryBlockToCanvas(templateId, dropX, dropY);
+        }
+
+        function addLibraryBlockToCanvas(templateId, customX = null, customY = null) {
+            const template = extraLibraryCatalog.find(x => x.id === templateId);
+            if (!template) return;
+
+            const existing = simBlocks.find(b => b.id === template.id);
+            let newBlock;
+            if (!existing) {
+                newBlock = JSON.parse(JSON.stringify(template));
+            } else {
+                const uniqueSuffix = Math.floor(100 + Math.random() * 899);
+                newBlock = {
+                    ...JSON.parse(JSON.stringify(template)),
+                    id: `${template.id}_${uniqueSuffix}`,
+                    title: `${template.title} #${uniqueSuffix}`,
+                    x: Math.min(1150, template.x + 40),
+                    y: Math.min(620, template.y + 40)
+                };
+            }
+
+            if (customX !== null && customY !== null) {
+                const clampedX = Math.max(15, Math.min(1190, customX));
+                const clampedY = Math.max(70, Math.min(675, customY));
+                newBlock.x = Math.round(clampedX / 10) * 10;
+                newBlock.y = Math.round(clampedY / 10) * 10;
+            }
+
+            simBlocks.push(newBlock);
+            document.getElementById('canvas-model-name').textContent = 'Prilagodjeni_Model.slx';
+            document.getElementById('active-project-badge').textContent = `Aktivno blokova: ${simBlocks.length}`;
+            renderCanvasBlocks();
+            renderWires();
+            updateChecklistUI();
+            renderLibraryPalette();
+            setToast(`Dodan element na radnu površinu: <strong>${newBlock.title}</strong>. Kliknite na ⚙️ za prilagodbu.`);
+        }
+
+        function loadProjektMarko() {
+            simBlocks = JSON.parse(JSON.stringify(projektMarkoTemplate));
+            activeConnections = requiredConnections.map(r => ({ from: r.from, to: r.to }));
+            selectedSourceBlock = null;
+
+            document.getElementById('canvas-model-name').textContent = 'ProjektMarko.slx';
+            document.getElementById('active-project-badge').textContent = 'Primjer: ProjektMarko';
+
+            renderCanvasBlocks();
+            renderWires();
+            updateChecklistUI();
+            renderLibraryPalette();
+            setToast('Uspješno učitan <strong>Primjer: ProjektMarko</strong> sa svim hidrauličkim i upravljačkim spojevima!');
+        }
+
+        function clearWorkspace() {
+            simBlocks = [];
+            activeConnections = [];
+            selectedSourceBlock = null;
+            document.getElementById('canvas-model-name').textContent = 'Prazan_Model.slx';
+            document.getElementById('active-project-badge').textContent = 'Prazna radna površina';
+
+            renderCanvasBlocks();
+            renderWires();
+            updateChecklistUI();
+            renderLibraryPalette();
+            setToast('Radna površina je ispražnjena. Povucite elemente iz biblioteke ili odaberite <strong>Primjer: ProjektMarko</strong>.');
+        }
+
+        function initSimulinkWorkspace() {
+            simBlocks = [];
+            activeConnections = [];
+            renderCanvasBlocks();
+            renderWires();
+            updateChecklistUI();
+            renderLibraryPalette();
+        }
+
+        function renderCanvasBlocks() {
+            const container = document.getElementById('blocks-container');
+            container.innerHTML = '';
+
+            simBlocks.forEach(blk => {
+                const el = document.createElement('div');
+                el.id = `block-${blk.id}`;
+                el.className = 'sim-block pointer-events-auto select-none';
+                el.style.left = `${blk.x}px`;
+                el.style.top = `${blk.y}px`;
+
+                const iconSvg = BLOCK_ICONS[blk.iconKey] || BLOCK_ICONS.sensor;
+
+                el.innerHTML = `
+                    <div class="px-2.5 py-1.5 rounded-t-[8px] flex items-center justify-between border-b border-slate-700/80" style="background: ${blk.color}24;">
+                        <div class="flex items-center gap-1.5 min-w-0">
+                            <span style="color: ${blk.color}" class="shrink-0">${iconSvg}</span>
+                            <span class="mono text-[9px] font-bold tracking-wider uppercase truncate" style="color: ${blk.color}">${blk.category}</span>
+                        </div>
+                        <button onclick="openBlockConfigModal(event, '${blk.id}')" class="w-5 h-5 rounded hover:bg-slate-700/70 flex items-center justify-center text-slate-300 hover:text-white transition shrink-0" title="Prilagodi parametre elementa">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="p-3">
+                        <div class="font-bold text-xs text-white leading-tight">${blk.title}</div>
+                        <div class="text-[10px] text-slate-400 mt-1 leading-snug">${blk.subtitle}</div>
+                        ${blk.customParam ? `<div class="mt-1.5 px-1.5 py-0.5 rounded bg-slate-900/90 border border-slate-800 text-[9px] mono text-emerald-400 truncate">${blk.customParam}</div>` : ''}
+                        <div class="mt-2 pt-2 border-t border-slate-800 flex items-center justify-between text-[10px] mono text-slate-300">
+                            <div class="flex items-center gap-1.5">
+                                <div id="port-in-${blk.id}" class="port port-in" title="Ulazni port: kliknite za spajanje" onclick="handlePortClick(event, '${blk.id}', 'in')"></div>
+                                <span class="truncate max-w-[75px]">${blk.inLabel}</span>
+                            </div>
+                            <div class="flex items-center gap-1.5">
+                                <span class="truncate max-w-[75px] text-right">${blk.outLabel}</span>
+                                <div id="port-out-${blk.id}" class="port port-out" title="Izlazni port: kliknite za spajanje" onclick="handlePortClick(event, '${blk.id}', 'out')"></div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+
+                // Dragging handler
+                el.addEventListener('mousedown', (e) => {
+                    if (e.target.classList.contains('port') || e.target.closest('button')) return;
+                    draggingBlock = blk;
+                    const rect = el.getBoundingClientRect();
+                    dragOffsetX = e.clientX - rect.left;
+                    dragOffsetY = e.clientY - rect.top;
+                    el.classList.add('selected');
+                });
+
+                container.appendChild(el);
+            });
+        }
+
+        // ============================================================================
+        // BLOCK CONFIGURATION GEAR MODAL FUNCTIONS
+        // ============================================================================
+        function openBlockConfigModal(e, blockId) {
+            e.stopPropagation();
+            const blk = simBlocks.find(b => b.id === blockId);
+            if (!blk) return;
+
+            currentEditingBlockId = blockId;
+            document.getElementById('cfg-block-id').textContent = `ID: ${blk.id}`;
+            document.getElementById('cfg-title').value = blk.title || '';
+            document.getElementById('cfg-category').value = blk.category || '';
+            document.getElementById('cfg-subtitle').value = blk.subtitle || '';
+            document.getElementById('cfg-in-label').value = blk.inLabel || '';
+            document.getElementById('cfg-out-label').value = blk.outLabel || '';
+            document.getElementById('cfg-custom-param').value = blk.customParam || '';
+            document.getElementById('cfg-color').value = blk.color || '#0284c7';
+
+            document.getElementById('block-config-modal').classList.remove('hidden');
+        }
+
+        function closeBlockConfigModal() {
+            currentEditingBlockId = null;
+            document.getElementById('block-config-modal').classList.add('hidden');
+        }
+
+        function saveBlockConfig() {
+            if (!currentEditingBlockId) return;
+            const blk = simBlocks.find(b => b.id === currentEditingBlockId);
+            if (blk) {
+                blk.title = document.getElementById('cfg-title').value.trim() || blk.title;
+                blk.category = document.getElementById('cfg-category').value.trim() || blk.category;
+                blk.subtitle = document.getElementById('cfg-subtitle').value.trim() || blk.subtitle;
+                blk.inLabel = document.getElementById('cfg-in-label').value.trim() || blk.inLabel;
+                blk.outLabel = document.getElementById('cfg-out-label').value.trim() || blk.outLabel;
+                blk.customParam = document.getElementById('cfg-custom-param').value.trim();
+                blk.color = document.getElementById('cfg-color').value || blk.color;
+
+                renderCanvasBlocks();
+                renderWires();
+                setToast(`Spremljene postavke za element <strong>${blk.title}</strong>.`);
+            }
+            closeBlockConfigModal();
+        }
+
+        function deleteCurrentConfiguredBlock() {
+            if (!currentEditingBlockId) return;
+            const blk = simBlocks.find(b => b.id === currentEditingBlockId);
+            simBlocks = simBlocks.filter(b => b.id !== currentEditingBlockId);
+            activeConnections = activeConnections.filter(c => c.from !== currentEditingBlockId && c.to !== currentEditingBlockId);
+
+            closeBlockConfigModal();
+            renderCanvasBlocks();
+            renderWires();
+            updateChecklistUI();
+            renderLibraryPalette();
+            if (blk) setToast(`Uklonjen element <strong>${blk.title}</strong> s radne površine.`);
+        }
+
+        // Global mousemove / mouseup for smooth block dragging
+        window.addEventListener('mousemove', (e) => {
+            if (!draggingBlock) return;
+            const canvas = document.getElementById('simulink-canvas');
+            const canvasRect = canvas.getBoundingClientRect();
+            let newX = e.clientX - canvasRect.left - dragOffsetX;
+            let newY = e.clientY - canvasRect.top - dragOffsetY;
+
+            // Keep inside canvas bounds
+            newX = Math.max(15, Math.min(1190, newX));
+            newY = Math.max(70, Math.min(675, newY));
+
+            draggingBlock.x = Math.round(newX / 10) * 10;
+            draggingBlock.y = Math.round(newY / 10) * 10;
+
+            const el = document.getElementById(`block-${draggingBlock.id}`);
+            if (el) {
+                el.style.left = `${draggingBlock.x}px`;
+                el.style.top = `${draggingBlock.y}px`;
+            }
+            renderWires();
+        });
+
+        window.addEventListener('mouseup', () => {
+            if (draggingBlock) {
+                const el = document.getElementById(`block-${draggingBlock.id}`);
+                if (el) el.classList.remove('selected');
+                draggingBlock = null;
+            }
+        });
+
+        function handlePortClick(e, blockId, portType) {
+            e.stopPropagation();
+
+            if (portType === 'out') {
+                // Select source block
+                clearPortHighlights();
+                selectedSourceBlock = blockId;
+                const outPort = document.getElementById(`port-out-${blockId}`);
+                if (outPort) outPort.classList.add('active-port');
+                setToast(`Odabran izlaz iz bloka "${getBlockTitle(blockId)}". Sada kliknite na sivi ulazni port ciljnog bloka.`);
+            } else if (portType === 'in') {
+                if (!selectedSourceBlock) {
+                    setToast(`Prvo kliknite na plavi izlazni port (desno na bloku), a zatim na ulazni port.`);
+                    return;
+                }
+                if (selectedSourceBlock === blockId) {
+                    setToast(`Ne možete spojiti blok sam sa sobom.`);
+                    clearPortHighlights();
+                    selectedSourceBlock = null;
+                    return;
+                }
+
+                // Add connection if not already present
+                const exists = activeConnections.some(c => c.from === selectedSourceBlock && c.to === blockId);
+                if (!exists) {
+                    activeConnections.push({ from: selectedSourceBlock, to: blockId });
+                    setToast(`Spojeno: ${getBlockTitle(selectedSourceBlock)} ➔ ${getBlockTitle(blockId)}`);
+                }
+                clearPortHighlights();
+                selectedSourceBlock = null;
+                renderWires();
+                updateChecklistUI();
+            }
+        }
+
+        function clearPortHighlights() {
+            document.querySelectorAll('.port').forEach(p => p.classList.remove('active-port'));
+        }
+
+        function getBlockTitle(id) {
+            const b = simBlocks.find(x => x.id === id);
+            return b ? b.title : id;
+        }
+
+        function renderWires() {
+            const svg = document.getElementById('wires-svg');
+            svg.innerHTML = '';
+
+            // Reset port connected indicators
+            document.querySelectorAll('.port').forEach(p => p.classList.remove('connected'));
+
+            activeConnections.forEach((conn, index) => {
+                const fromBlk = simBlocks.find(b => b.id === conn.from);
+                const toBlk = simBlocks.find(b => b.id === conn.to);
+                if (!fromBlk || !toBlk) return;
+
+                const outPort = document.getElementById(`port-out-${conn.from}`);
+                const inPort = document.getElementById(`port-in-${conn.to}`);
+                if (outPort) outPort.classList.add('connected');
+                if (inPort) inPort.classList.add('connected');
+
+                // Coordinates relative to canvas
+                const x1 = fromBlk.x + 205;
+                const y1 = fromBlk.y + 88;
+                const x2 = toBlk.x;
+                const y2 = toBlk.y + 88;
+
+                // Determine color from requiredConnections or default
+                const reqMatch = requiredConnections.find(r => r.from === conn.from && r.to === conn.to);
+                const strokeColor = reqMatch ? reqMatch.color : '#64748b';
+
+                // Smooth cubic bezier curve (handles wrap-around feedback loops nicely)
+                let d = '';
+                if (x2 >= x1 - 20) {
+                    const dx = Math.max(60, (x2 - x1) * 0.5);
+                    d = `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`;
+                } else {
+                    // Feedback loop wire routing above or below
+                    const loopY = (y1 < 250 && y2 < 250) ? Math.min(y1, y2) - 65 : Math.max(y1, y2) + 65;
+                    d = `M ${x1} ${y1} C ${x1 + 70} ${y1}, ${x1 + 70} ${loopY}, ${(x1 + x2) / 2} ${loopY} S ${x2 - 70} ${y2}, ${x2} ${y2}`;
+                }
+
+                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                path.setAttribute('d', d);
+                path.setAttribute('stroke', strokeColor);
+                path.setAttribute('class', 'wire-path wire-animated');
+                path.setAttribute('title', 'Kliknite za brisanje ovog spoja');
+                path.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    activeConnections.splice(index, 1);
+                    renderWires();
+                    updateChecklistUI();
+                    setToast(`Odspojena linija: ${fromBlk.title} ➔ ${toBlk.title}`);
+                });
+
+                svg.appendChild(path);
+            });
+        }
+
+        function updateChecklistUI() {
+            const listEl = document.getElementById('connection-checklist');
+            listEl.innerHTML = '';
+
+            let completedCount = 0;
+            requiredConnections.forEach(req => {
+                const isDone = activeConnections.some(c => c.from === req.from && c.to === req.to);
+                if (isDone) completedCount++;
+
+                const item = document.createElement('div');
+                item.className = `p-2 rounded border flex items-center justify-between gap-2 ${
+                    isDone 
+                        ? 'bg-emerald-950/30 border-emerald-500/30 text-emerald-200' 
+                        : 'bg-[#161f24] border-slate-800 text-slate-400'
+                }`;
+                item.innerHTML = `
+                    <span class="truncate">${req.label}</span>
+                    <span class="font-bold shrink-0 ${isDone ? 'text-emerald-400' : 'text-amber-400'}">${isDone ? '✓ SPOJENO' : '○ ČEKA'}</span>
+                `;
+                listEl.appendChild(item);
+            });
+
+            const total = requiredConnections.length;
+            document.getElementById('conn-count').textContent = `${completedCount}/${total}`;
+
+            const dot = document.getElementById('wiring-dot');
+            const badge = document.getElementById('checklist-badge');
+
+            if (completedCount === total) {
+                dot.className = 'w-2.5 h-2.5 rounded-full bg-emerald-400 shadow-[0_0_8px_#34d399]';
+                badge.className = 'mono text-[10px] px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30';
+                badge.textContent = 'Spremno za simulaciju';
+            } else {
+                dot.className = 'w-2.5 h-2.5 rounded-full bg-amber-400';
+                badge.className = 'mono text-[10px] px-2 py-0.5 rounded bg-amber-500/20 text-amber-300';
+                badge.textContent = `Nedostaje ${total - completedCount}`;
+            }
+        }
+
+        function autoConnectAll(silent = false) {
+            if (simBlocks.length === 0) {
+                loadProjektMarko();
+                return;
+            }
+            activeConnections = requiredConnections.filter(r =>
+                simBlocks.some(b => b.id === r.from) && simBlocks.some(b => b.id === r.to)
+            ).map(r => ({ from: r.from, to: r.to }));
+            renderWires();
+            updateChecklistUI();
+            if (!silent) {
+                setToast('Svi dostupni elementi na radnoj površini su automatski spojeni!');
+            }
+        }
+
+        function clearConnections() {
+            activeConnections = [];
+            selectedSourceBlock = null;
+            clearPortHighlights();
+            renderWires();
+            updateChecklistUI();
+            setToast('Sve žice su uklonjene. Spojite blokove klikom na plavi izlazni pa sivi ulazni port.');
+        }
+
+        function setToast(msg) {
+            const box = document.getElementById('workspace-toast');
+            if (box) box.innerHTML = msg;
+        }
+
+        // ============================================================================
+        // JSON PROJECT EXPORT & IMPORT (.json)
+        // ============================================================================
+        function exportProjectJSON() {
+            const modelName = document.getElementById('canvas-model-name').textContent || 'Perfusor_Projekt.slx';
+            const cleanBaseName = modelName.replace(/\.[^/.]+$/, '');
+
+            const payload = {
+                app: 'UNIRI MEDRI Perfusor simulator',
+                institution: 'Sveučilište u Rijeci, Medicinski fakultet, Centar za biomodeliranje i inovacije u medicini',
+                version: '1.0',
+                exportedAt: new Date().toISOString(),
+                modelName: modelName,
+                simParameters: {
+                    uiSpPress: state.uiSpPress,
+                    uiSpFlow: state.uiSpFlow,
+                    R_cap: state.R_cap,
+                    mlPerRev: state.mlPerRev
+                },
+                blocks: simBlocks,
+                connections: activeConnections
+            };
+
+            const jsonStr = JSON.stringify(payload, null, 2);
+            const blob = new Blob([jsonStr], { type: 'application/json;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `${cleanBaseName}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+
+            setToast(`Projekt je uspješno izvezen u datoteku <strong>${cleanBaseName}.json</strong> (${simBlocks.length} blokova, ${activeConnections.length} spojeva).`);
+        }
+
+        function triggerImportJSON() {
+            const fileInput = document.getElementById('json-file-input');
+            if (fileInput) {
+                fileInput.value = '';
+                fileInput.click();
+            }
+        }
+
+        function importProjectJSON(event) {
+            const file = event.target.files && event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function (e) {
+                try {
+                    const data = JSON.parse(e.target.result);
+                    if (!data || !Array.isArray(data.blocks) || !Array.isArray(data.connections)) {
+                        setToast('<span class="text-rose-400">Neispravan JSON format! Datoteka mora sadržavati polja "blocks" i "connections".</span>');
+                        return;
+                    }
+
+                    simBlocks = data.blocks.map(b => ({
+                        id: String(b.id || 'blk_' + Math.floor(Math.random() * 1000)),
+                        iconKey: b.iconKey || 'sensor',
+                        title: b.title || 'Blok',
+                        category: b.category || 'ELEMENT',
+                        color: b.color || '#0284c7',
+                        x: Number.isFinite(b.x) ? b.x : 100,
+                        y: Number.isFinite(b.y) ? b.y : 120,
+                        subtitle: b.subtitle || '',
+                        inLabel: b.inLabel || 'Ulaz',
+                        outLabel: b.outLabel || 'Izlaz',
+                        customParam: b.customParam || ''
+                    }));
+
+                    activeConnections = data.connections
+                        .filter(c => c && c.from && c.to)
+                        .map(c => ({ from: String(c.from), to: String(c.to) }));
+
+                    if (data.simParameters) {
+                        if (typeof data.simParameters.uiSpPress === 'number') {
+                            state.uiSpPress = data.simParameters.uiSpPress;
+                            state.activeSpPress = data.simParameters.uiSpPress;
+                            document.getElementById('ui-sp-press').textContent = state.uiSpPress;
+                        }
+                        if (typeof data.simParameters.uiSpFlow === 'number') {
+                            state.uiSpFlow = data.simParameters.uiSpFlow;
+                            state.activeSpFlow = data.simParameters.uiSpFlow;
+                            document.getElementById('ui-sp-flow').textContent = state.uiSpFlow.toFixed(2);
+                        }
+                        if (typeof data.simParameters.R_cap === 'number') {
+                            updateCal('r', data.simParameters.R_cap);
+                            const rSlider = document.getElementById('cal-r-slider');
+                            if (rSlider) rSlider.value = data.simParameters.R_cap;
+                        }
+                        if (typeof data.simParameters.mlPerRev === 'number') {
+                            updateCal('ml', data.simParameters.mlPerRev);
+                        }
+                    }
+
+                    const loadedName = data.modelName || file.name.replace(/\.json$/i, '.slx');
+                    document.getElementById('canvas-model-name').textContent = loadedName;
+                    document.getElementById('active-project-badge').textContent = `Učitan JSON: ${file.name}`;
+
+                    selectedSourceBlock = null;
+                    renderCanvasBlocks();
+                    renderWires();
+                    updateChecklistUI();
+                    renderLibraryPalette();
+                    setToast(`Uspješno učitan projekt iz datoteke <strong>${file.name}</strong> (${simBlocks.length} blokova, ${activeConnections.length} spojeva).`);
+                } catch (err) {
+                    setToast('<span class="text-rose-400">Pogreška pri čitanju JSON datoteke! Provjerite je li datoteka ispravna.</span>');
+                }
+            };
+            reader.readAsText(file);
+        }
+
+        // ============================================================================
+        // OPTIMIZED VECTOR PDF EXPORT (< 50 KB instead of 17 MB!)
+        // ============================================================================
+        function sanitizeCroatianForPDF(str) {
+            if (!str) return '';
+            return String(str)
+                .replace(/č/g, 'c').replace(/Č/g, 'C')
+                .replace(/ć/g, 'c').replace(/Ć/g, 'C')
+                .replace(/ž/g, 'z').replace(/Ž/g, 'Z')
+                .replace(/š/g, 's').replace(/Š/g, 'S')
+                .replace(/đ/g, 'd').replace(/Đ/g, 'D')
+                .replace(/½/g, '1/2').replace(/×/g, 'x')
+                .replace(/·/g, '-').replace(/±/g, '+/-')
+                .replace(/→/g, '->').replace(/↔/g, '<->');
+        }
+
+        function hexToRgb(hex) {
+            const clean = (hex || '#38bdf8').replace('#', '');
+            const num = parseInt(clean, 16);
+            return [(num >> 16) & 255, (num >> 8) & 255, num & 255];
+        }
+
+        async function exportSchematicPDF() {
+            const btn = document.getElementById('btn-export-pdf');
+            const originalText = btn.innerHTML;
+            btn.innerHTML = `<span>Generiranje PDF-a...</span>`;
+            btn.disabled = true;
+
+            try {
+                const { jsPDF } = window.jspdf;
+                const pdf = new jsPDF({
+                    orientation: 'landscape',
+                    unit: 'mm',
+                    format: 'a4',
+                    compress: true // Enables internal Deflate compression (<50 KB file!)
+                });
+
+                const pageWidth = pdf.internal.pageSize.getWidth();   // 297 mm
+                const pageHeight = pdf.internal.pageSize.getHeight(); // 210 mm
+
+                // Clean engineering light/dark vector sheet background
+                pdf.setFillColor(15, 21, 25);
+                pdf.rect(0, 0, pageWidth, pageHeight, 'F');
+
+                // Subtle technical grid in vector
+                pdf.setDrawColor(28, 39, 46);
+                pdf.setLineWidth(0.15);
+                for (let gx = 10; gx < pageWidth - 10; gx += 10) {
+                    pdf.line(gx, 28, gx, pageHeight - 14);
+                }
+                for (let gy = 28; gy < pageHeight - 14; gy += 10) {
+                    pdf.line(10, gy, pageWidth - 10, gy);
+                }
+
+                // Header Banner in PDF
+                pdf.setFillColor(20, 29, 36);
+                pdf.rect(10, 8, pageWidth - 20, 17, 'F');
+                pdf.setDrawColor(45, 65, 78);
+                pdf.setLineWidth(0.3);
+                pdf.rect(10, 8, pageWidth - 20, 17, 'S');
+
+                pdf.setTextColor(56, 189, 248);
+                pdf.setFont('helvetica', 'bold');
+                pdf.setFontSize(9.5);
+                pdf.text('SVEUCILISTE U RIJECI, MEDICINSKI FAKULTET, CENTAR ZA BIOMODELIRANJE I INOVACIJE U MEDICINI', 14, 14);
+
+                pdf.setTextColor(255, 255, 255);
+                pdf.setFontSize(12);
+                const modelName = document.getElementById('canvas-model-name').textContent;
+                pdf.text(sanitizeCroatianForPDF(`Perfusor simulator — Tehnicki shematski prikaz (${modelName})`), 14, 20.5);
+
+                pdf.setFont('helvetica', 'normal');
+                pdf.setFontSize(8);
+                pdf.setTextColor(148, 163, 184);
+                const nowStr = new Date().toLocaleString('hr-HR');
+                pdf.text(sanitizeCroatianForPDF(`Datum: ${nowStr} | Blokova: ${simBlocks.length} | Spojeva: ${activeConnections.length}/${requiredConnections.length}`), pageWidth - 14, 20.5, { align: 'right' });
+
+                // Coordinate transform from 1420x820 canvas to A4 diagram area (277x162 mm)
+                const scaleX = (pageWidth - 24) / 1300;
+                const scaleY = (pageHeight - 46) / 720;
+                const ox = 12;
+                const oy = 26;
+
+                // 1. Draw Vector Wires
+                activeConnections.forEach(conn => {
+                    const fromBlk = simBlocks.find(b => b.id === conn.from);
+                    const toBlk = simBlocks.find(b => b.id === conn.to);
+                    if (!fromBlk || !toBlk) return;
+
+                    const reqMatch = requiredConnections.find(r => r.from === conn.from && r.to === conn.to);
+                    const [r, g, b] = hexToRgb(reqMatch ? reqMatch.color : '#38bdf8');
+                    pdf.setDrawColor(r, g, b);
+                    pdf.setLineWidth(0.65);
+
+                    const x1 = ox + (fromBlk.x + 205) * scaleX;
+                    const y1 = oy + (fromBlk.y + 82) * scaleY;
+                    const x2 = ox + toBlk.x * scaleX;
+                    const y2 = oy + (toBlk.y + 82) * scaleY;
+
+                    if (x2 >= x1 - 4) {
+                        const midX = (x1 + x2) / 2;
+                        pdf.line(x1, y1, midX, y1);
+                        pdf.line(midX, y1, midX, y2);
+                        pdf.line(midX, y2, x2, y2);
+                    } else {
+                        const loopY = (y1 < oy + 55 && y2 < oy + 55) ? Math.min(y1, y2) - 12 : Math.max(y1, y2) + 12;
+                        pdf.line(x1, y1, x1 + 6, y1);
+                        pdf.line(x1 + 6, y1, x1 + 6, loopY);
+                        pdf.line(x1 + 6, loopY, x2 - 6, loopY);
+                        pdf.line(x2 - 6, loopY, x2 - 6, y2);
+                        pdf.line(x2 - 6, y2, x2, y2);
+                    }
+                });
+
+                // 2. Draw Vector Blocks (crisp text and geometry, tiny file size)
+                simBlocks.forEach(blk => {
+                    const bx = ox + blk.x * scaleX;
+                    const by = oy + blk.y * scaleY;
+                    const bw = 205 * scaleX;
+                    const bh = 105 * scaleY;
+                    const [cr, cg, cb] = hexToRgb(blk.color);
+
+                    // Block body
+                    pdf.setFillColor(23, 32, 38);
+                    pdf.setDrawColor(cr, cg, cb);
+                    pdf.setLineWidth(0.45);
+                    pdf.roundedRect(bx, by, bw, bh, 2, 2, 'FD');
+
+                    // Header bar
+                    pdf.setFillColor(Math.round(cr * 0.28), Math.round(cg * 0.28), Math.round(cb * 0.28));
+                    pdf.rect(bx + 0.3, by + 0.3, bw - 0.6, 5.2, 'F');
+
+                    // Category
+                    pdf.setFont('helvetica', 'bold');
+                    pdf.setFontSize(5.5);
+                    pdf.setTextColor(cr, cg, cb);
+                    pdf.text(sanitizeCroatianForPDF(blk.category).substring(0, 32), bx + 2, by + 3.8);
+
+                    // Title
+                    pdf.setFont('helvetica', 'bold');
+                    pdf.setFontSize(7.5);
+                    pdf.setTextColor(255, 255, 255);
+                    pdf.text(sanitizeCroatianForPDF(blk.title).substring(0, 28), bx + 2, by + 9.5);
+
+                    // Subtitle
+                    pdf.setFont('helvetica', 'normal');
+                    pdf.setFontSize(5.8);
+                    pdf.setTextColor(175, 190, 205);
+                    const subLines = pdf.splitTextToSize(sanitizeCroatianForPDF(blk.subtitle), bw - 4);
+                    pdf.text(subLines.slice(0, 2), bx + 2, by + 13.5);
+
+                    // Custom Param
+                    if (blk.customParam) {
+                        pdf.setFont('courier', 'bold');
+                        pdf.setFontSize(5.5);
+                        pdf.setTextColor(52, 211, 153);
+                        pdf.text(sanitizeCroatianForPDF(blk.customParam).substring(0, 30), bx + 2, by + bh - 5.5);
+                    }
+
+                    // Ports
+                    pdf.setFillColor(16, 185, 129);
+                    pdf.circle(bx, by + bh - 2.5, 1.1, 'F');
+                    pdf.setFillColor(56, 189, 248);
+                    pdf.circle(bx + bw, by + bh - 2.5, 1.1, 'F');
+
+                    pdf.setFont('helvetica', 'normal');
+                    pdf.setFontSize(5);
+                    pdf.setTextColor(148, 163, 184);
+                    pdf.text(sanitizeCroatianForPDF(blk.inLabel).substring(0, 15), bx + 2, by + bh - 1.8);
+                    pdf.text(sanitizeCroatianForPDF(blk.outLabel).substring(0, 15), bx + bw - 2, by + bh - 1.8, { align: 'right' });
+                });
+
+                // Footer
+                pdf.setFont('helvetica', 'normal');
+                pdf.setFontSize(7.5);
+                pdf.setTextColor(148, 163, 184);
+                pdf.text('Sveuciliste u Rijeci - Medicinski fakultet - Centar za biomodeliranje i inovacije u medicini | Perfusor simulator (Vektorski PDF)', 12, pageHeight - 6);
+
+                pdf.save('UNIRI_MEDRI_Perfusor_Simulator_Shema.pdf');
+                setToast('Vektorski PDF shematski prikaz uspješno preuzet (optimizirana veličina ~35 KB!).');
+            } catch (err) {
+                setToast('Pogreška pri generiranju PDF-a. Pokušajte ponovno.');
+            } finally {
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+            }
+        }
+
+        // ============================================================================
+        // 2. SIMULATION POPUP LAUNCHER & VALIDATION
+        // ============================================================================
+        function attemptRunSimulation() {
+            const missing = requiredConnections.filter(req => 
+                !activeConnections.some(c => c.from === req.from && c.to === req.to)
+            );
+
+            if (missing.length > 0) {
+                document.getElementById('modal-missing-count').textContent = `nedostaje još ${missing.length} spojeva`;
+                document.getElementById('incomplete-modal').classList.remove('hidden');
+                return;
+            }
+
+            openSimulationPopup();
+        }
+
+        function closeIncompleteModal() {
+            document.getElementById('incomplete-modal').classList.add('hidden');
+        }
+
+        function autoConnectAndRun() {
+            closeIncompleteModal();
+            autoConnectAll(true);
+            openSimulationPopup();
+        }
+
+        function openSimulationPopup() {
+            document.getElementById('sim-popup-modal').classList.remove('hidden');
+            updateHMI();
+            drawCharts();
+        }
+
+        function closeSimulationPopup() {
+            document.getElementById('sim-popup-modal').classList.add('hidden');
+        }
+
+        function handleSimBackdropClick(e) {
+            if (e.target.id === 'sim-popup-modal') {
+                closeSimulationPopup();
+            }
+        }
+
+        // ============================================================================
+        // 3. SIMULINK DIGITAL TWIN ENGINE (100 Hz Control & Physics + 20 Hz UI)
+        // ============================================================================
+
+        const MODES = {
+            INIT: 0,
+            IDLE: 1,
+            PRIMING: 2,
+            RUNNING: 3,
+            PAUSED: 4,
+            ALARM: 5
+        };
+
+        const ALARM_SUBSTATES = {
+            NONE: 'NONE',
+            REVERSE: 'REVERSE',           // >450 mmHg: pump 1 backwards
+            RELIEVE_FWD: 'RELIEVE_FWD',   // >420 mmHg: pump 1 off, pump 2 drains
+            RELIEVE_BACK: 'RELIEVE_BACK', // <-80 mmHg: pump 2 off, pump 1 fills
+            STOP_ALL: 'STOP_ALL'          // stall, sensor, air, E-stop
+        };
+
+        const state = {
+            mode: MODES.RUNNING,
+            alarmSubstate: ALARM_SUBSTATES.NONE,
+            alarmReason: '',
+            alarmTimer: 0,
+            initTimer: 0,
+
+            uiSpPress: 350,
+            uiSpFlow: 7.00,
+            activeSpPress: 350,
+            activeSpFlow: 7.00,
+
+            rampedPress: 350,
+            rampedFlow: 7.00,
+
+            P1: 385.0,
+            P2: 315.0,
+            P_GC: 350.0,
+            Q: 7.00,
+            volumeL: 7.17,
+            runtimeSec: 75,
+
+            R_cap: 10.0,
+            C1: 0.035,
+            C2: 0.035,
+            mlPerRev: 3.5,
+
+            Q_pump1: 7.0,
+            Q_pump2: 7.0,
+            stepHz1: 4200,
+            stepHz2: 4200,
+
+            faults: {
+                air: false,
+                stall: false,
+                estop: false
+            }
+        };
+
+        const HISTORY_LEN = 600;
+        const history = {
+            p1: [],
+            p2: [],
+            pgc: [],
+            spPress: [],
+            flow: [],
+            vol: []
+        };
+
+        function initSheet3History() {
+            for (let i = 0; i < HISTORY_LEN; i++) {
+                const tSec = (i - HISTORY_LEN) / 10;
+                if (tSec < -48) {
+                    history.pgc.push(100);
+                    history.p1.push(125);
+                    history.p2.push(75);
+                    history.spPress.push(350);
+                    history.flow.push(5.0);
+                    history.vol.push(1.0 + ((i / HISTORY_LEN) * 6.17));
+                } else if (tSec < -42) {
+                    const prog = (tSec + 48) / 6;
+                    const pgc = 100 + prog * 255;
+                    history.pgc.push(pgc);
+                    history.p1.push(pgc + 25);
+                    history.p2.push(pgc - 25);
+                    history.spPress.push(350);
+                    history.flow.push(5.0);
+                    history.vol.push(1.0 + ((i / HISTORY_LEN) * 6.17));
+                } else if (tSec < -28) {
+                    history.pgc.push(350);
+                    history.p1.push(375);
+                    history.p2.push(325);
+                    history.spPress.push(350);
+                    history.flow.push(5.0);
+                    history.vol.push(1.0 + ((i / HISTORY_LEN) * 6.17));
+                } else {
+                    const prog = Math.min(1, (tSec + 28) / 2.0);
+                    const fl = 5.0 + prog * 2.0;
+                    const dp = (fl * state.R_cap) / 2;
+                    history.pgc.push(350);
+                    history.p1.push(350 + dp);
+                    history.p2.push(350 - dp);
+                    history.spPress.push(350);
+                    history.flow.push(fl);
+                    history.vol.push(1.0 + ((i / HISTORY_LEN) * 6.17));
+                }
+            }
+        }
+        initSheet3History();
+
+        function arduino10msTick() {
+            const dt = 0.01;
+
+            state.P_GC = 0.5 * (state.P1 + state.P2);
+            state.Q = Math.max(0, (state.P1 - state.P2) / state.R_cap);
+
+            let pMax = Math.max(state.P1, state.P2);
+            let pMin = Math.min(state.P1, state.P2);
+
+            if (state.mode !== MODES.ALARM) {
+                if (state.faults.estop) {
+                    triggerAlarm(ALARM_SUBSTATES.STOP_ALL, 'E-STOP PRESSED – motor power cut');
+                } else if (state.faults.air) {
+                    triggerAlarm(ALARM_SUBSTATES.STOP_ALL, 'AIR DETECTED (pin 23) – pumps stopped');
+                } else if (state.faults.stall) {
+                    triggerAlarm(ALARM_SUBSTATES.STOP_ALL, 'HALL SENSOR STALL – driver halted');
+                } else if (pMax > 450) {
+                    triggerAlarm(ALARM_SUBSTATES.REVERSE, 'OVERPRESSURE >450 – pump 1 reversing');
+                } else if (pMax > 420) {
+                    triggerAlarm(ALARM_SUBSTATES.RELIEVE_FWD, 'HIGH PRESSURE >420 – relieving forward');
+                } else if (pMin < -80) {
+                    triggerAlarm(ALARM_SUBSTATES.RELIEVE_BACK, 'SUB-ATMOSPHERIC <-80 – relieving back');
+                }
+            }
+
+            if (state.mode === MODES.INIT) {
+                state.initTimer -= dt;
+                state.Q_pump1 = 0;
+                state.Q_pump2 = 0;
+                state.P1 += (0 - state.P1) * 0.1;
+                state.P2 += (0 - state.P2) * 0.1;
+                if (state.initTimer <= 0) {
+                    state.mode = MODES.IDLE;
+                }
+            } 
+            else if (state.mode === MODES.IDLE) {
+                state.Q_pump1 = 0;
+                state.Q_pump2 = 0;
+                state.P1 *= 0.992;
+                state.P2 *= 0.992;
+            } 
+            else if (state.mode === MODES.PRIMING) {
+                state.rampedFlow = 0.5;
+                state.Q_pump1 = 0.5;
+                state.Q_pump2 = 0.5;
+                state.runtimeSec += dt;
+            } 
+            else if (state.mode === MODES.RUNNING) {
+                const maxPressStep = 50 * dt;
+                const maxFlowStep = 1.0 * dt;
+
+                if (Math.abs(state.activeSpPress - state.rampedPress) <= maxPressStep) {
+                    state.rampedPress = state.activeSpPress;
+                } else {
+                    state.rampedPress += Math.sign(state.activeSpPress - state.rampedPress) * maxPressStep;
+                }
+
+                if (Math.abs(state.activeSpFlow - state.rampedFlow) <= maxFlowStep) {
+                    state.rampedFlow = state.activeSpFlow;
+                } else {
+                    state.rampedFlow += Math.sign(state.activeSpFlow - state.rampedFlow) * maxFlowStep;
+                }
+
+                const pressError = state.rampedPress - state.P_GC;
+                const diffSpeed = pressError * 0.08;
+
+                state.Q_pump1 = Math.max(0, state.rampedFlow + diffSpeed);
+                state.Q_pump2 = Math.max(0, state.rampedFlow - diffSpeed);
+
+                state.runtimeSec += dt;
+            } 
+            else if (state.mode === MODES.PAUSED) {
+                state.rampedFlow = 0;
+                const pressError = state.rampedPress - state.P_GC;
+                const diffSpeed = pressError * 0.05;
+                state.Q_pump1 = Math.max(0, diffSpeed);
+                state.Q_pump2 = Math.max(0, -diffSpeed);
+            } 
+            else if (state.mode === MODES.ALARM) {
+                state.alarmTimer += dt;
+                if (state.alarmSubstate === ALARM_SUBSTATES.REVERSE) {
+                    state.Q_pump1 = -1.8;
+                    state.Q_pump2 = 1.0;
+                    if (Math.max(state.P1, state.P2) < 360 || state.alarmTimer > 3.0) {
+                        state.alarmSubstate = ALARM_SUBSTATES.STOP_ALL;
+                        state.alarmReason = 'OVERPRESSURE RELIEVED – stopped (awaiting reset)';
+                    }
+                } else if (state.alarmSubstate === ALARM_SUBSTATES.RELIEVE_FWD) {
+                    state.Q_pump1 = 0;
+                    state.Q_pump2 = 1.5;
+                    if (Math.max(state.P1, state.P2) < 370 || state.alarmTimer > 3.0) {
+                        state.alarmSubstate = ALARM_SUBSTATES.STOP_ALL;
+                        state.alarmReason = 'HIGH PRESSURE RELIEVED – stopped (awaiting reset)';
+                    }
+                } else if (state.alarmSubstate === ALARM_SUBSTATES.RELIEVE_BACK) {
+                    state.Q_pump1 = 1.5;
+                    state.Q_pump2 = 0;
+                    if (Math.min(state.P1, state.P2) > -20 || state.alarmTimer > 3.0) {
+                        state.alarmSubstate = ALARM_SUBSTATES.STOP_ALL;
+                        state.alarmReason = 'VACUUM RELIEVED – stopped (awaiting reset)';
+                    }
+                } else {
+                    state.Q_pump1 = 0;
+                    state.Q_pump2 = 0;
+                }
+            }
+
+            const Q_cap = (state.P1 - state.P2) / state.R_cap;
+            const dP1 = ((state.Q_pump1 - Q_cap) / state.C1) * dt;
+            const dP2 = ((Q_cap - state.Q_pump2) / state.C2) * dt;
+
+            state.P1 += dP1;
+            state.P2 += dP2;
+            state.P_GC = 0.5 * (state.P1 + state.P2);
+            state.Q = Math.max(0, Q_cap);
+
+            state.volumeL = (state.volumeL + (state.Q / 60) * dt) % 10.0;
+
+            state.stepHz1 = Math.round((state.Q_pump1 / state.mlPerRev) * 2100);
+            state.stepHz2 = Math.round((state.Q_pump2 / state.mlPerRev) * 2100);
+        }
+
+        function triggerAlarm(substate, reasonText) {
+            state.mode = MODES.ALARM;
+            state.alarmSubstate = substate;
+            state.alarmReason = reasonText;
+            state.alarmTimer = 0;
+            logAlarmEvent(reasonText);
+        }
+
+        let tickCounter = 0;
+        setInterval(() => {
+            // Only advance simulation when popup modal is open
+            const isPopupOpen = !document.getElementById('sim-popup-modal').classList.contains('hidden');
+            if (!isPopupOpen) return;
+
+            arduino10msTick();
+            tickCounter++;
+
+            if (tickCounter % 10 === 0) {
+                history.p1.push(state.P1);
+                history.p2.push(state.P2);
+                history.pgc.push(state.P_GC);
+                history.spPress.push(state.activeSpPress);
+                history.flow.push(state.Q);
+                history.vol.push(state.volumeL);
+
+                if (history.p1.length > HISTORY_LEN) {
+                    history.p1.shift();
+                    history.p2.shift();
+                    history.pgc.shift();
+                    history.spPress.shift();
+                    history.flow.shift();
+                    history.vol.shift();
+                }
+
+                updateHMI();
+                drawCharts();
+            }
+
+            if (tickCounter % 50 === 0) {
+                appendSerialLog();
+            }
+        }, 10);
+
+        function updateHMI() {
+            document.getElementById('tel-p1').textContent = Math.round(state.P1);
+            document.getElementById('tel-p2').textContent = Math.round(state.P2);
+            document.getElementById('tel-pgc').textContent = state.P_GC.toFixed(1);
+            document.getElementById('tel-flow').textContent = state.Q.toFixed(2);
+            document.getElementById('tel-vol').textContent = state.volumeL.toFixed(2);
+
+            const mins = String(Math.floor(state.runtimeSec / 60)).padStart(2, '0');
+            const secs = String(Math.floor(state.runtimeSec % 60)).padStart(2, '0');
+            document.getElementById('tel-runtime').textContent = `${mins}:${secs}`;
+
+            document.getElementById('sim-p1-hz').textContent = `${state.stepHz1} Hz`;
+            document.getElementById('sim-p2-hz').textContent = `${state.stepHz2} Hz`;
+            const jitter = 1380 + Math.floor(Math.random() * 90);
+            document.getElementById('sim-cpu-us').textContent = `${jitter} µs`;
+
+            const statusBar = document.getElementById('status-bar');
+            const badge = document.getElementById('mode-badge');
+            const bannerText = document.getElementById('alarm-banner-text');
+            const btnStart = document.getElementById('btn-start');
+            const btnPrime = document.getElementById('btn-prime');
+            const btnReset = document.getElementById('btn-reset');
+
+            const isFaultPresent = state.faults.air || state.faults.stall || state.faults.estop ||
+                                   Math.max(state.P1, state.P2) > 420 || Math.min(state.P1, state.P2) < -80;
+
+            if (state.mode === MODES.ALARM) {
+                statusBar.className = "h-12 px-6 bg-[#3b1216] border-b border-red-500/50 flex items-center justify-between transition-colors duration-200";
+                badge.className = "mono text-xs font-bold px-3.5 py-0.5 rounded-full bg-red-500/30 text-red-200 border border-red-400";
+                badge.textContent = `ALARM · ${state.alarmSubstate}`;
+                bannerText.className = "text-xs text-red-200 font-bold mono";
+                bannerText.textContent = state.alarmReason;
+
+                btnStart.disabled = true;
+                btnPrime.disabled = true;
+
+                if (!isFaultPresent && state.alarmSubstate === ALARM_SUBSTATES.STOP_ALL) {
+                    btnReset.disabled = false;
+                    btnReset.className = "btn-touch w-full py-3 rounded-lg bg-red-500 hover:bg-red-400 text-black mono text-xs font-bold shadow-[0_0_15px_rgba(239,68,68,0.5)]";
+                } else {
+                    btnReset.disabled = true;
+                    btnReset.className = "btn-touch w-full py-3 rounded-lg bg-[#192125] border border-[#2d3a42] mono text-xs font-bold text-slate-400";
+                }
+            } else {
+                statusBar.className = "h-12 px-6 bg-[#171f24] border-b border-[#242f35] flex items-center justify-between transition-colors duration-200";
+                bannerText.className = "text-xs text-slate-400 font-medium";
+                bannerText.textContent = "No active alarms";
+
+                btnStart.disabled = false;
+                btnPrime.disabled = !(state.mode === MODES.IDLE);
+                btnReset.disabled = true;
+                btnReset.className = "btn-touch w-full py-3 rounded-lg bg-[#192125] border border-[#2d3a42] mono text-xs font-bold text-slate-400";
+
+                const modeNames = ['INIT', 'IDLE', 'PRIMING', 'RUNNING', 'PAUSED'];
+                badge.textContent = modeNames[state.mode];
+
+                if (state.mode === MODES.RUNNING) {
+                    badge.className = "mono text-xs font-bold px-3.5 py-0.5 rounded-full bg-[#11382b] text-[#38c18c] border border-[#38c18c]";
+                } else if (state.mode === MODES.PAUSED) {
+                    badge.className = "mono text-xs font-bold px-3.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-400";
+                } else if (state.mode === MODES.PRIMING) {
+                    badge.className = "mono text-xs font-bold px-3.5 py-0.5 rounded-full bg-sky-500/20 text-sky-300 border border-sky-400";
+                } else {
+                    badge.className = "mono text-xs font-bold px-3.5 py-0.5 rounded-full bg-slate-700/60 text-slate-300 border border-slate-500";
+                }
+            }
+        }
+
+        function drawCharts() {
+            drawPressureChart();
+            drawFlowChart();
+        }
+
+        function drawPressureChart() {
+            const canvas = document.getElementById('chart-pressure');
+            if (!canvas) return;
+            const ctx = canvas.getContext('2d');
+            const w = canvas.width;
+            const h = canvas.height;
+            ctx.clearRect(0, 0, w, h);
+
+            const padL = 36, padR = 12, padT = 14, padB = 18;
+            const plotW = w - padL - padR;
+            const plotH = h - padT - padB;
+            const maxP = 450;
+
+            const yForP = (p) => padT + plotH * (1 - (p / maxP));
+
+            ctx.strokeStyle = '#222d33';
+            ctx.lineWidth = 1;
+            ctx.fillStyle = '#7c8d96';
+            ctx.font = '11px JetBrains Mono';
+            ctx.textAlign = 'right';
+
+            [0, 100, 200, 300].forEach(val => {
+                const y = yForP(val);
+                ctx.beginPath();
+                ctx.moveTo(padL, y);
+                ctx.lineTo(w - padR, y);
+                ctx.stroke();
+                ctx.fillText(val, padL - 6, y + 4);
+            });
+
+            const y400 = yForP(400);
+            ctx.save();
+            ctx.strokeStyle = '#9c6b21';
+            ctx.setLineDash([4, 4]);
+            ctx.beginPath();
+            ctx.moveTo(padL, y400);
+            ctx.lineTo(w - padR, y400);
+            ctx.stroke();
+            ctx.fillStyle = '#eab338';
+            ctx.textAlign = 'left';
+            ctx.fillText('400 warn', 4, y400 + 4);
+            ctx.restore();
+
+            ctx.save();
+            ctx.strokeStyle = '#64748b';
+            ctx.setLineDash([5, 5]);
+            ctx.beginPath();
+            for (let i = 0; i < history.spPress.length; i++) {
+                const x = padL + (i / (HISTORY_LEN - 1)) * plotW;
+                const y = yForP(history.spPress[i]);
+                if (i === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+            ctx.restore();
+
+            const plotLine = (arr, color, width = 2) => {
+                ctx.strokeStyle = color;
+                ctx.lineWidth = width;
+                ctx.beginPath();
+                for (let i = 0; i < arr.length; i++) {
+                    const x = padL + (i / (HISTORY_LEN - 1)) * plotW;
+                    const y = Math.max(2, Math.min(h - 2, yForP(arr[i])));
+                    if (i === 0) ctx.moveTo(x, y);
+                    else ctx.lineTo(x, y);
+                }
+                ctx.stroke();
+            };
+
+            plotLine(history.p1, '#eab338', 1.8);
+            plotLine(history.p2, '#569cd6', 1.8);
+            plotLine(history.pgc, '#ffffff', 2.2);
+        }
+
+        function drawFlowChart() {
+            const canvas = document.getElementById('chart-flow');
+            if (!canvas) return;
+            const ctx = canvas.getContext('2d');
+            const w = canvas.width;
+            const h = canvas.height;
+            ctx.clearRect(0, 0, w, h);
+
+            const padL = 36, padR = 12, padT = 12, padB = 22;
+            const plotW = w - padL - padR;
+            const plotH = h - padT - padB;
+            const maxF = 8.5;
+
+            const yForF = (f) => padT + plotH * (1 - (f / maxF));
+
+            ctx.strokeStyle = '#222d33';
+            ctx.lineWidth = 1;
+            ctx.fillStyle = '#7c8d96';
+            ctx.font = '11px JetBrains Mono';
+            ctx.textAlign = 'right';
+
+            [0, 4, 8].forEach(val => {
+                const y = yForF(val);
+                ctx.beginPath();
+                ctx.moveTo(padL, y);
+                ctx.lineTo(w - padR, y);
+                ctx.stroke();
+                ctx.fillText(val, padL - 6, y + 4);
+            });
+
+            ctx.textAlign = 'center';
+            ctx.fillText('-60 s', padL + 15, h - 5);
+            ctx.fillText('-30 s', padL + plotW * 0.5, h - 5);
+            ctx.fillText('now', w - padR - 10, h - 5);
+
+            ctx.strokeStyle = '#38c18c';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            for (let i = 0; i < history.vol.length; i++) {
+                const x = padL + (i / (HISTORY_LEN - 1)) * plotW;
+                const y = yForF((history.vol[i] / 10.0) * 8.0);
+                if (i === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+
+            ctx.strokeStyle = '#569cd6';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            for (let i = 0; i < history.flow.length; i++) {
+                const x = padL + (i / (HISTORY_LEN - 1)) * plotW;
+                const y = yForF(history.flow[i]);
+                if (i === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+        }
+
+        function adjustSetpoint(type, delta) {
+            if (type === 'press') {
+                state.uiSpPress = Math.max(0, Math.min(350, state.uiSpPress + delta));
+                document.getElementById('ui-sp-press').textContent = state.uiSpPress;
+                document.getElementById('pending-press-tag').classList.toggle('hidden', state.uiSpPress === state.activeSpPress);
+            } else {
+                state.uiSpFlow = Math.max(0, Math.min(7.0, +(state.uiSpFlow + delta).toFixed(2)));
+                document.getElementById('ui-sp-flow').textContent = state.uiSpFlow.toFixed(2);
+                document.getElementById('pending-flow-tag').classList.toggle('hidden', state.uiSpFlow === state.activeSpFlow);
+            }
+        }
+
+        function applySetpoints() {
+            state.activeSpPress = state.uiSpPress;
+            state.activeSpFlow = state.uiSpFlow;
+            document.getElementById('pending-press-tag').classList.add('hidden');
+            document.getElementById('pending-flow-tag').classList.add('hidden');
+        }
+
+        function sendCommand(cmd) {
+            if (state.mode === MODES.ALARM && cmd !== 'RESET') return;
+
+            if (cmd === 'PRIME' && state.mode === MODES.IDLE) {
+                state.mode = MODES.PRIMING;
+            } else if (cmd === 'START') {
+                state.mode = MODES.RUNNING;
+            } else if (cmd === 'PAUSE' && state.mode === MODES.RUNNING) {
+                state.mode = MODES.PAUSED;
+            } else if (cmd === 'STOP') {
+                state.mode = MODES.IDLE;
+            } else if (cmd === 'RESET' && state.mode === MODES.ALARM) {
+                state.mode = MODES.IDLE;
+                state.alarmSubstate = ALARM_SUBSTATES.NONE;
+                state.alarmReason = '';
+            }
+            updateHMI();
+        }
+
+        function injectPressureSpike(targetPressure) {
+            state.P1 = targetPressure;
+            if (targetPressure < 0) state.P2 = targetPressure;
+        }
+
+        function toggleLatchedFault(faultKey) {
+            state.faults[faultKey] = !state.faults[faultKey];
+            updateFaultButtonsUI();
+        }
+
+        function clearAllFaults() {
+            state.faults.air = false;
+            state.faults.stall = false;
+            state.faults.estop = false;
+            if (state.P1 > 390) state.P1 = 350;
+            if (state.P1 < 0) state.P1 = 50;
+            if (state.P2 < 0) state.P2 = 50;
+            updateFaultButtonsUI();
+        }
+
+        function updateFaultButtonsUI() {
+            const airSpan = document.getElementById('fault-air-status');
+            airSpan.textContent = state.faults.air ? 'AIR BUBBLE!' : 'CLEAR';
+            airSpan.className = state.faults.air ? 'text-red-400 font-bold' : 'text-emerald-400';
+
+            const stallSpan = document.getElementById('fault-stall-status');
+            stallSpan.textContent = state.faults.stall ? 'STALLED!' : 'NORMAL';
+            stallSpan.className = state.faults.stall ? 'text-red-400 font-bold' : 'text-emerald-400';
+
+            const estopSpan = document.getElementById('fault-estop-status');
+            estopSpan.textContent = state.faults.estop ? 'ENGAGED!' : 'RELEASED';
+            estopSpan.className = state.faults.estop ? 'text-red-400 font-bold' : 'text-emerald-400';
+
+            document.getElementById('ind-drivers').className = (state.faults.stall || state.faults.estop)
+                ? "w-2.5 h-2.5 rounded-full bg-red-500 shadow-[0_0_8px_#ef4444]"
+                : "w-2.5 h-2.5 rounded-full bg-emerald-400 shadow-[0_0_8px_#34d399]";
+        }
+
+        function updateCal(type, val) {
+            if (type === 'ml') {
+                state.mlPerRev = parseFloat(val);
+                document.getElementById('cal-ml-val').textContent = state.mlPerRev.toFixed(2);
+            } else if (type === 'r') {
+                state.R_cap = parseFloat(val);
+                document.getElementById('cal-r-val').textContent = state.R_cap.toFixed(1);
+            }
+        }
+
+        function triggerAutoZero() {
+            state.mode = MODES.INIT;
+            state.initTimer = 2.0;
+            switchTab('run');
+        }
+
+        function switchTab(tabName) {
+            ['run', 'trends', 'alarms', 'calibration'].forEach(t => {
+                document.getElementById(`tab-${t}`).classList.toggle('hidden', t !== tabName);
+                const navBtn = document.getElementById(`nav-${t}`);
+                if (t === tabName) {
+                    navBtn.className = "h-full border-b-2 border-[#3898cf] text-white px-2";
+                } else {
+                    navBtn.className = "h-full border-b-2 border-transparent text-slate-400 hover:text-slate-200 px-2";
+                }
+            });
+        }
+
+        function appendSerialLog() {
+            const box = document.getElementById('serial-monitor');
+            if (!box) return;
+            const now = new Date().toLocaleTimeString('en-GB', { hour12: false });
+            const telLine = `[${now}] RX $TEL,M=${state.mode},P1=${Math.round(state.P1)},P2=${Math.round(state.P2)},PGC=${state.P_GC.toFixed(1)},Q=${state.Q.toFixed(2)},CPU=1410*CS`;
+            const setLine = `[${now}] TX $SET,SP_P=${state.activeSpPress},SP_Q=${state.activeSpFlow.toFixed(2)}*CS`;
+
+            const div = document.createElement('div');
+            div.innerHTML = `<span class="text-emerald-400">${telLine}</span><br><span class="text-sky-400">${setLine}</span>`;
+            box.appendChild(div);
+            if (box.children.length > 25) box.removeChild(box.firstChild);
+            box.scrollTop = box.scrollHeight;
+        }
+
+        function logAlarmEvent(text) {
+            const list = document.getElementById('alarm-log-list');
+            const now = new Date().toLocaleTimeString('en-GB', { hour12: false });
+            const item = document.createElement('div');
+            item.className = "p-2.5 rounded bg-red-950/40 border border-red-500/30 text-red-200 flex justify-between";
+            item.innerHTML = `<span>${text}</span><span class="text-red-400">${now}</span>`;
+            list.prepend(item);
+        }
+
+        function clearAlarmLog() {
+            document.getElementById('alarm-log-list').innerHTML = '<div class="text-slate-500">Alarm log cleared.</div>';
+        }
+
+        function exportCSV() {
+            let csv = "Index,P1_mmHg,P2_mmHg,PGC_mmHg,Setpoint_mmHg,Flow_Lmin,Volume_L\n";
+            for (let i = 0; i < history.p1.length; i++) {
+                csv += `${i},${history.p1[i].toFixed(1)},${history.p2[i].toFixed(1)},${history.pgc[i].toFixed(1)},${history.spPress[i]},${history.flow[i].toFixed(2)},${history.vol[i].toFixed(2)}\n`;
+            }
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'perfusor_telemetry_60s.csv';
+            a.click();
+        }
+
+        window.onload = function () {
+            initSimulinkWorkspace();
+        };
+    </script>
+</body>
+</html>
